@@ -19,8 +19,9 @@
 
 use 5.024;
 use strict;
+use Fcntl;
 use File::Basename "basename";
-use File::Temp "tempdir";
+use File::Temp "tempfile";
 use File::Find ();
 use Data::Dumper ();
 use Getopt::Long qw(:config posix_default bundling permute);
@@ -86,8 +87,6 @@ if (! defined $out) {
 
 die "bad --compress=$compression" unless $compression =~ /\A[0-9]\z/;
 
-my $tmpdir = tempdir(CLEANUP => 1);
-my $tmpfname = $tmpdir . "/zipapp.zip";
 my $zipdir = $cwd;
 
 if (defined $dir) {
@@ -141,21 +140,34 @@ if ($copy_pod) {
 
 $shebang = "#!/usr/bin/perl\n" if $shebang eq '';
 
+my $mode = ($shebang =~ /\A#!/ ? 0777 : 0666);
+
 # get zip data
 
 delete $ENV{ZIPOPT};
 delete $ENV{ZIP};
 
-system("zip", "-X", "-$compression", $tmpfname, "--", @ARGV) == 0 or die "zip: $?";
-
-chdir $cwd or die "$!";
-
 my $zipdat;
-open I, "<", $tmpfname or die "open: $!";
+
 {
-    local $/;
-    $zipdat = <I>;
+    my ($fh, $tmpfname) =
+      tempfile("zipapp-XXXXXXXX", SUFFIX=>".zip",
+	       UNLINK => 1, TMPDIR => 1);
+    print $fh "PK\5\6\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+    # minimal empty ZIP structure to make zip happy
+    $fh->flush();
+
+    system("zip", "-X", "-$compression", $tmpfname, "--", @ARGV) == 0 or die "zip failed: $?";
+
+    open I, "<", $tmpfname or die "open: $!";
+    {
+	local $/;
+	$zipdat = <I>;
+    }
+    close $fh;
+    undef $fh; # to erase temporary file
 }
+chdir $cwd or die "$!";
 
 my $quote = 0;
 if ($base64) {
@@ -200,7 +212,7 @@ our $script = &script(
 
 print "writing to $out\n";
 
-open O, ">", $out or die "write: $!";
+sysopen(O, $out, O_WRONLY | O_CREAT | O_TRUNC, $mode) or die "write: $!";
 
 print O $shebang or die "$!";
 print O "\n" or die "$!";
@@ -211,13 +223,13 @@ close O or die "$!";
 if ($quote) {
     exit(0) # do nothing
 } else {
-    exec("zip", "-Aq", $out); # fix offset values in the archive
+    exit(!!system("zip", "-Aq", $out)); # fix offset values in the archive
 }
 
 sub script () {
     my ($features, %replace) = @_;
     my $script = &script_body();
-    
+
     $script =~ s[^#BEGIN\ ([A-Z]+)\n(.*?)^#END\ \1\n]
 		[grep ($_ eq $1, @$features) ? $2 : ""]mseg;
     $script =~ s/@@([A-Z]+)@@/%replace{$1}/eg;
@@ -542,7 +554,7 @@ It must be available in the command search path.
 
 =head1 REFERENCE
 
-L<Homepage|https://www.github.com/oiwa-personal/zipperlapp>
+L<Homepage|https://www.github.com/yoiwa-personal/zipperlapp>
 
 L<Python's "zipapp" implementation|https://docs.python.org/en/3/library/zipapp.html>
 
