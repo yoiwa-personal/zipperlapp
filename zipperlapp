@@ -36,6 +36,7 @@ my $mainopt = undef;
 my $copy_pod = 0;
 my $quote_pod = 0;
 my $protect_pod = 1;
+my $textarchive = 0;
 my $base64 = 0;
 
 GetOptions(
@@ -47,7 +48,13 @@ GetOptions(
 	   'protect-pod' => sub { $protect_pod = 2 },
 	   'no-protect-pod' => sub { $protect_pod = 0 },
 	   'base64|B' => \$base64,
+	   'text-archive|T' => \$textarchive,
 	   'help' => sub { pod2usage(1) }) or do { pod2usage(2); exit 1 };
+
+if (!!$quote_pod + !!$base64 >= 2) {
+    print STDERR "Error: --quote_pod and --base64 are exclusive\n";
+    pod2usage(2);
+}
 
 pod2usage(2) if @ARGV == 0;
 
@@ -97,7 +104,6 @@ if (defined $dir) {
     File::Find::find
 	({wanted => sub {
 	      my $f = $File::Find::name;
-	      say $f;
 	      $f =~ s(^\./)()s;
 	      return if $f =~ /^\./s;
 	      push @PLs, $f if $f =~ /\.pl$/s;
@@ -149,7 +155,23 @@ delete $ENV{ZIP};
 
 my $zipdat;
 
-{
+if ($textarchive) {
+    local $/;
+    $zipdat = '';
+    for my $f (@ARGV) {
+	open I, "<", $f or die "cannot read $f: $!";
+	binmode(I);
+	my $dat = <I>;
+	close I or die "cannot read $f: $!";
+	my $sep;
+	for(;;) {
+	    $sep = sprintf("----TEXTARCHIVE-%08d----------------", int(rand(100000000)));
+	    last if index($dat, $sep) == -1 and index($f, $sep) == -1;
+	}
+	$zipdat .= "TXD\n$sep\n$f\n$sep\n$dat\n$sep\n";
+    }
+    $zipdat .= "TXE\n";
+} else {
     my ($fh, $tmpfname) =
       tempfile("zipapp-XXXXXXXX", SUFFIX=>".zip",
 	       UNLINK => 1, TMPDIR => 1);
@@ -200,6 +222,7 @@ our %config = (main => $main, dequote => $quote);
 our @features = ("MAIN",
 		 ($quote ? ("QUOTE") : ()),
 		 ($compression != 0 ? ("COMPRESSION") : ()),
+		 ($textarchive ? ("TEXTARCHIVE") : ("ZIPARCHIVE")),
 		);
 
 our $script = &script(
@@ -220,7 +243,7 @@ print O $script or die "$!";
 print O $zipdat or die "$!";
 close O or die "$!";
 
-if ($quote) {
+if ($quote || $textarchive) {
     exit(0) # do nothing
 } else {
     exit(!!system("zip", "-Aq", $out)); # fix offset values in the archive
@@ -230,8 +253,8 @@ sub script () {
     my ($features, %replace) = @_;
     my $script = &script_body();
 
-    $script =~ s[^#BEGIN\ ([A-Z]+)\n(.*?)^#END\ \1\n]
-		[grep ($_ eq $1, @$features) ? $2 : ""]mseg;
+    1 while $script =~ s[^#BEGIN\ ([A-Z]+)\n(.*?)^#END\ \1\n]
+			[grep ($_ eq $1, @$features) ? $2 : ""]mseg;
     $script =~ s/@@([A-Z]+)@@/%replace{$1}/eg;
     return $script;
 }
@@ -262,8 +285,6 @@ sub read_data {
 
 sub prepare {
     use bytes;
-    # This function assumes a "correct" zip archive,
-    # using per-file headers instead of the central archive.
 #BEGIN QUOTE
     if (my $quote = $CONFIG{dequote}) {
         local $/;
@@ -282,6 +303,9 @@ sub prepare {
 
     for(;;) {
 	my $hdr = read_data(4);
+#BEGIN ZIPARCHIVE
+        # This function assumes a "correct" zip archive,
+        # using per-file headers instead of the central archive.
 	if ($hdr eq "PK\3\4") {
 	    # per_file zip header
 	    my (undef, $flags, $comp, undef, undef, $crc, 
@@ -314,13 +338,29 @@ sub prepare {
 	    }
 
 	    $source{$fname} = $dat;
+	    next;
 	} elsif ($hdr eq "PK\1\2") {
 	    last; # central directory found. exiting.
 	} elsif ($hdr eq "PK\5\6") {
 	    fatal "malformed or empty archive";
-	} else {
-	    fatal "malformed data";
 	}
+#END ZIPARCHIVE
+#BEGIN TEXTARCHIVE
+	if ($hdr eq "TXD\n") {
+	    (my $bar = <DATA>) ne '' or fatal "malformed archive";
+	    my ($fname, $dat);
+	    {
+		local $/ = "\n" . $bar;
+		chomp ($fname = <DATA>);
+                chomp ($dat = <DATA>);
+	    }
+	    $source{$fname} = $dat;
+	    next;
+	} elsif ($hdr eq "TXE\n") {
+	    last;
+	}
+#END TEXTARCHIVE
+	fatal "malformed data";
     }
     close DATA;
 }
@@ -363,8 +403,9 @@ zipperlapp - Make an executable perl script bundle using zip archive
   Options:
     --main              -m module    specify main entry module
     --output=file       -o file      output file
-    --compress[={0-9}]  -c[{0-9}]    apply compression
+    --compress[={0-9}]  -C[{0-9}]    apply compression
     --base64            -B           encode with BASE64
+    --text-archive      -T           use text-based archive format
     --copy-pod          -p           copy pod from main module
     --protect-pod
     --quote-pod
@@ -379,8 +420,8 @@ zipperlapp - Make an executable perl script bundle using zip archive
 =item B<--main, -m>
 
 Specify the main module which is automatically "require"-d.  Also, a
-"she-bang" line and continuous comment lines are copied from the main
-module to the output.
+"she-bang" line and continuous comment lines at the top of main module
+are copied to the output.
 
 If one and only one script with extension C<'.pl'> is contained in the
 input set of modules, it is automatically detected.  Otherwise, the
@@ -418,9 +459,27 @@ when you modify the contents with zip archivers.
 =item B<--base64, -B>
 
 It will encode the embedded ZIP archive with Base64 encoding.  It
-makes the script about 33% larger and also loses zip-transparent
+makes the script about 40% larger and also loses zip-transparent
 behavior as an sfx file, in trade for making the output script
-ASCII-clean.
+completely ASCII-clean.
+
+=item B<--text-archive, -T>
+
+It will use its own plaintext archive format for storing modules.
+The output will not be compatible with zip archivers.
+
+Output scripts generated with this option will be plaintext, if all
+input modules are plaintext in ASCII or some specific ASCII-compatible
+encoding.  In addition to that, it is easier to modify its content by
+hand, because the format uses no byte-oriented structure.
+
+This format will be useful when (1) you need to edit module sources
+embedded in outputs by text editors, or (2) when the whole source code
+must be transparently visible for auditing or inspections (if even
+C<-C0> is unsatisfactory).
+
+The option combination with C<-B> is possible, but it is not very
+meaningful.
 
 =back
 
