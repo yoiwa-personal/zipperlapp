@@ -411,6 +411,19 @@ zipperlapp - Make an executable perl script bundle using zip archive
     --quote-pod
     --help                           show help
 
+=head1 DESCRIPTION
+
+This program bundles several Perl module files and wraps them as an
+"executable" zip archive.  An output file can be invoked as a Perl
+script, or (if a source file contains a C<"#!"> line) as a directly
+executable command.  Also, it can be handled by (almost every) zip
+archiver as an "sfx" file.
+
+Inside Perl scripts, all files contained in the archive is put in the
+top of the searched library set.  The program can simply use C<use> or
+C<require> statements to load the contained modules, without modifying
+the C<@INC> variable.
+
 =head1 OPTIONS
 
 =head2 INPUT/OUTPUT OPTIONS
@@ -541,18 +554,25 @@ Otherwise, all files specified in the argument are included.
 
 =back
 
-=head1 DESCRIPTION
+=head1 APIS
 
-This program bundles several Perl module files and wraps them as an
-"executable" zip archive.  An output file can be invoked as a Perl
-script, or (if a source file contains a C<"#!"> line) as a directly
-executable command.  Also, it can be handled by (almost every) zip
-archiver as an "sfx" file.
+There are currently no APIs visible to user scripts except import
+hooks.  Package C<ZipPerlApp> is provided in the zipped script, so if
+you need to change some behavior upon packaging, something like
 
-Inside Perl scripts, all files contained in the archive is put in the
-top of the searched library set.  The program can simply use C<use> or
-C<require> statements to load the contained modules, without modifying
-the C<@INC> variable.
+    use FindBin;
+    use if (! scalar %ZipPerlApp::), lib => $FindBin::Bin;
+
+or
+
+    BEGIN {
+        if (! scalar %ZipPerlApp::) {
+            require FindBin;
+            require lib $FindBin::Bin;
+        }
+    }
+
+can be used.
 
 =head1 LIMITATIONS
 
