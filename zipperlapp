@@ -31,6 +31,7 @@ use Cwd;
 our $VERSION = "1.0";
 
 my $compression = 0;
+my $bzipcompression = 0;
 my $out = undef;
 my $mainopt = undef;
 my $copy_pod = 0;
@@ -41,6 +42,7 @@ my $base64 = 0;
 
 GetOptions(
 	   'compress|C:9' => \$compression,
+	   'bzip' => \$bzipcompression,
 	   'output|o:s' => \$out,
 	   'main|m:s' => \$mainopt,
 	   'copy-pod|p' => \$copy_pod,
@@ -53,6 +55,14 @@ GetOptions(
 
 if (!!$quote_pod + !!$base64 >= 2) {
     print STDERR "Error: --quote_pod and --base64 are exclusive\n";
+    pod2usage(2);
+}
+if (!!$compression + !!$bzipcompression >= 2) {
+    print STDERR "Error: --compression and --bzip are exclusive\n";
+    pod2usage(2);
+}
+unless ($compression =~ /\A[0-9]|Zb\z/) {
+    print STDERR "Error: bad --compress=$compression (should be 0 to 9)";
     pod2usage(2);
 }
 
@@ -91,8 +101,6 @@ if (! defined $out) {
     $out =~ s/(\.pl)?$/\.plz/;
     say "output is set to: $out";
 }
-
-die "bad --compress=$compression" unless $compression =~ /\A[0-9]\z/;
 
 my $zipdir = $cwd;
 
@@ -179,7 +187,8 @@ if ($textarchive) {
     # minimal empty ZIP structure to make zip happy
     $fh->flush();
 
-    system("zip", "-X", "-$compression", $tmpfname, "--", @ARGV) == 0 or die "zip failed: $?";
+    system("zip", "-X", ($bzipcompression ? ("-Z", "bzip") : ("-$compression")),
+	   $tmpfname, "--", @ARGV) == 0 or die "zip failed: $?";
 
     open I, "<", $tmpfname or die "open: $!";
     {
@@ -221,7 +230,8 @@ if ($protect_pod && $embpod_maybe) {
 our %config = (main => $main, dequote => $quote);
 our @features = ("MAIN",
 		 ($quote ? ("QUOTE") : ()),
-		 ($compression != 0 ? ("COMPRESSION") : ()),
+		 ($compression ? ("COMPRESSION") : ()),
+		 ($bzipcompression ? ("BZIPCOMPRESSION") : ()),
 		 ($textarchive ? ("TEXTARCHIVE") : ("ZIPARCHIVE")),
 		);
 
@@ -267,7 +277,12 @@ use strict;
 package @@PKGNAME@@;
 
 our %source;
+#BEGIN COMPRESSION
 my $zlib_loaded = 0;
+#END COMPRESSION
+#BEGIN BZIPCOMPRESSION
+my $bzlib_loaded = 0;
+#END BZIPCOMPRESSION
 our @@CONFIG@@
 
 sub fatal {
@@ -333,6 +348,22 @@ sub prepare {
 		fatal "Inflate failed: crc mismatch" unless Compress::Zlib::crc32($buf), $crc;
 		$dat = $buf;
 #END COMPRESSION
+#BEGIN BZIPCOMPRESSION
+	    } elsif ($comp == 12) {
+		unless ($bzlib_loaded) {
+		    require IO::Uncompress::Bunzip2;
+		    require Compress::Zlib;
+		    $bzlib_loaded = 1;
+		}
+		open my $fh, "<", \$dat or fatal "string IO failed.";
+		my $buf = '';
+		my $z = IO::Uncompress::Bunzip2->new($fh)
+		  or fatal "IO::Uncompress::Bunzip2: $IO::Uncompress::Bunzip2::Bunzip2Error\n";
+		my $status = $z->read($buf, $size);
+		fatal "Inflate failed: length mismatch" if $status != $size;
+		fatal "Inflate failed: crc mismatch" unless Compress::Zlib::crc32($buf), $crc;
+		$dat = $buf;
+#END BZIPCOMPRESSION
 	    } else {
 		fatal "unknown compression";
 	    }
