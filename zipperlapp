@@ -1,0 +1,1311 @@
+#!/usr/bin/perl
+# zipperlapp - Make an executable perl script bundle using zip archive
+#
+# https://github.com/yoiwa-personal/zipperlapp/
+#
+# Copyright 2019 Yutaka OIWA <yutaka@oiwa.jp>.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# This script is packaged by zipperlapp
+use 5.024;
+no utf8;
+use strict;
+package ZipPerlApp::__ARCHIVED__;
+
+our %source;
+our %CONFIG = (
+            'dequote' => 0,
+            'main' => 'zipperlapp.pl'
+          );
+
+
+sub fatal {
+    die("error processing zipped script: @_")
+}
+
+sub read_data {
+    my $len = $_[0];
+    return '' if $len == 0;
+    my $dat;
+    read(DATA, $dat, $len);
+    fatal "data truncated" if length($dat) != $len;
+    return $dat;
+}
+
+sub prepare {
+    use bytes;
+
+    for(;;) {
+	my $hdr = read_data(4);
+        # This function assumes a "correct" zip archive,
+        # using per-file headers instead of the central archive.
+	if ($hdr eq "PK\3\4") {
+	    # per_file zip header
+	    my (undef, $flags, $comp, undef, undef, $crc, 
+                $csize, $size, $fnamelen, $extlen) =
+                unpack("vvvvvVVVvv", read_data(26));
+	    fatal "unsupported: deferred length" if ($flags & 0x8 != 0);
+	    my $fname = read_data($fnamelen);
+	    my $ext = read_data($extlen);
+	    my $dat = read_data($csize);
+	    if ($comp == 0) {
+		fatal "malformed data: bad length" if $csize != $size;
+	    } else {
+		fatal "unknown compression";
+	    }
+
+	    $source{$fname} = $dat;
+	    next;
+	} elsif ($hdr eq "PK\1\2") {
+	    last; # central directory found. exiting.
+	} elsif ($hdr eq "PK\5\6") {
+	    fatal "malformed or empty archive";
+	}
+	fatal "malformed data";
+    }
+    close DATA;
+}
+
+sub provide {
+    my ($self, $fname) = @_;
+    if (exists($source{$fname})) {
+	my $str = $source{$fname};
+	open my $fh, "<", \$str or fatal "string IO failed.";
+	return \("#line 1 " . __FILE__  . "/$fname\n"), $fh;
+    }
+    return undef;
+}
+
+prepare();
+unshift @INC, \&provide;
+
+package main {
+    my $main = $CONFIG{main};
+    ZipPerlApp::__ARCHIVED__::fatal "missing main module in archive" unless exists $ZipPerlApp::__ARCHIVED__::source{$main};
+    do $main;
+    die $@ if $@;
+}
+=head1 NAME
+
+zipperlapp - Make an executable perl script bundle using zip archive
+
+=head1 SYNOPSIS
+
+  zipperlapp [options] {directory | file ...}
+
+  Options:
+    --main              -m module    specify main entry module
+    --output=file       -o file      output file
+    --compress[={0-9}]  -C[{0-9}]    apply compression
+    --base64            -B           encode with BASE64
+    --text-archive      -T           use text-based archive format
+    --copy-pod          -p           copy pod from main module
+    --protect-pod
+    --quote-pod
+    --help                           show help
+
+=head1 DESCRIPTION
+
+This program bundles several Perl module files and wraps them as an
+"executable" zip archive.  An output file can be invoked as a Perl
+script, or (if a source file contains a C<"#!"> line) as a directly
+executable command.  Also, it can be handled by (almost every) zip
+archiver as an "sfx" file.
+
+Inside Perl scripts, all files contained in the archive is put in the
+top of the searched library set.  The program can simply use C<use> or
+C<require> statements to load the contained modules, without modifying
+the C<@INC> variable.
+
+=head1 OPTIONS
+
+=head2 INPUT/OUTPUT OPTIONS
+
+=over 8
+
+=item B<--main, -m>
+
+Specify the main module which is automatically "require"-d.  Also, a
+"she-bang" line and continuous comment lines at the top of main module
+are copied to the output.
+
+If one and only one script with extension C<'.pl'> is contained in the
+input set of modules, it is automatically detected.  Otherwise, the
+main module must be explicitly specified.
+
+=item B<--output, -o>
+
+Specify the name of the output file.
+
+If omitted, either the name of the source directory or the base name
+of the main module is taken, with a postfix C<'.plz'> is appended.
+
+It is always safe to specify the output file.
+
+=back
+
+=head2 ARCHIVE OPTIONS
+
+=over 8
+
+=item B<--compress>, B<-C>
+
+Specify the compression level for the Deflate algorithm.
+
+If C<-C> is specified without a digit, the highest level 9 is set.
+
+If not specified at all, the files are not compressed.
+It makes the content of the script almost transparently visible.
+Also, the script will not load zlib and other libraries run-time.
+
+Outputs generated without C<-C> options will not contain decompression
+functionality, that means you need to add C<-0> or similar options
+when you modify the contents with zip archivers.
+
+=item B<--base64, -B>
+
+It will encode the embedded ZIP archive with Base64 encoding.  It
+makes the script about 40% larger and also loses zip-transparent
+behavior as an sfx file, in trade for making the output script
+completely ASCII-clean.
+
+=item B<--text-archive, -T>
+
+It will use its own plaintext archive format for storing modules.
+The output will not be compatible with zip archivers.
+
+Output scripts generated with this option will be plaintext, if all
+input modules are plaintext in ASCII or some specific ASCII-compatible
+encoding.  In addition to that, it is easier to modify its content by
+hand, because the format uses no byte-oriented structure.
+
+This format will be useful when (1) you need to edit module sources
+embedded in outputs by text editors, or (2) when the whole source code
+must be transparently visible for auditing or inspections (if even
+C<-C0> is unsatisfactory).
+
+The option combination with C<-B> is possible, but it is not very
+meaningful.
+
+=back
+
+=head2 POD HANDLING OPTIONS
+
+=over 8
+
+=item B<--copy-pod, -p>
+
+If specified, it will copy all pod (Perl's plain old document format)
+sections in the main module to the output script.
+
+Alternatively, when compression (-C) is not used, it is likely that
+any pod-using modules may see pod sections from all of embedded
+modules within the zip file structure.  If only your main module
+contains a pod, you may be possibly depend on that "behavior" and not
+using this option, although it is not a guaranteed behavior.
+
+=item B<--protect-pod>
+
+Unless either compression (-C) or Base64 encoding (-B) is used, pod
+processors may see pod sections embedded in the original source
+scripts, within the zip archive; It may either be a good or not a good
+thing.
+
+If C<--protect-pod> is specified, the command will insert a small
+snippet of Pod to the output so that most pod processors will skip
+such "ghost" of pods.  The process is done only when it is actually
+needed.
+
+This option is automatically enabled when C<--copy-pod> is used.
+If unwanted, you can specify C<--no-protect-pod>.
+
+=item B<--quote-pod>
+
+It will tweak the embedded ZIP archive so that the encoded script will
+not contain any active pod specification.  The tweak is performed only
+when it is really required, but if done, the output will loose
+zip-transparency.
+
+In most circumstances, C<--protect-pod> or C<-C> is enough, or
+C<--base64> is more reliable.
+
+=back
+
+=head2 ARGUMENTS
+
+=over 8
+
+=item B<directory>
+
+If there are only one argument and it is a name of directory, All
+C<*.pl>/C<*.pm> files under that directory (recursively) are included.
+The directory name itself is truncated.
+
+=item B<files>
+
+Otherwise, all files specified in the argument are included.
+
+=back
+
+=head1 APIS
+
+There are currently no APIs visible to user scripts except import
+hooks.  Package C<ZipPerlApp> is provided in the zipped script, so if
+you need to change some behavior upon packaging, something like
+
+    use FindBin;
+    use if (! scalar %ZipPerlApp::), lib => $FindBin::Bin;
+
+or
+
+    BEGIN {
+        if (! scalar %ZipPerlApp::) {
+            require FindBin;
+            require lib $FindBin::Bin;
+        }
+    }
+
+can be used.
+
+=head1 LIMITATIONS
+
+=over 2
+
+=item *
+
+Only pure Perl scripts or modules can be loaded from zip archive. For
+example, autoloading (*.al) or dynamic loading (*.so, *.dll) will not
+be available.
+
+=item *
+
+C<__FILE__> tokens in the archived file will have virtual values of
+C<"I<archivename>/I<modulename>">, which does not exist in the real
+file system.  This also holds for the "main script" to be referred to.
+It means that the common technique for making a "dual-use"
+module/script
+
+    if (__FILE__ eq $0)
+
+will not work.  Instead, please provide a short entry script as a main
+script.
+
+=item *
+
+For compactness (and minimal dependency only to core modules), an
+embedded parser for zip archives is extremely simple.  It can not
+parse archives with any advanced features or partially-broken
+archives.  If you modify the packed archive using usual zip archivers,
+be aware of that.
+
+=item *
+
+All files are decoded into the memory at the beginning of the program
+execution.  It is not wise to include unneeded files into the archive.
+
+=back
+
+=head1 IMPLEMENTATION
+
+A zip archive of module files are stored in the C<__DATA__> section.
+A minimal parser for Zip archives is embedded to the output script,
+and it will extract the source codes of all modules to an on-memory
+storage at the start-up.  An "import hook" subroutine is put into
+Perl's C<@INC> facility to load those modules by C<require> or C<use>.
+
+This enables use of C<__DATA__> sections in each included module.
+
+=head1 DEPENDENCIES
+
+Zipped scripts generated by this command will not depend on any
+external modules, except those included in the Core modules of Perl
+distributions as of version 5.24.1.
+
+This command itself is depending on the C<zip> command from Info-Zip.
+It must be available in the command search path.
+
+=head1 REFERENCE
+
+L<Homepage|https://www.github.com/yoiwa-personal/zipperlapp>
+
+L<Python's "zipapp" implementation|https://docs.python.org/en/3/library/zipapp.html>
+
+=head1 AUTHOR/COPYRIGHT
+
+Copyright 2019 Yutaka OIWA <yutaka@oiwa.jp>.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+L<http://www.apache.org/licenses/LICENSE-2.0>
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+As a special exception to the Apache License, outputs of this
+software, which contain a code snippet copied from this software, may
+be used and distributed under terms of your choice, so long as the
+sole purpose of these works is not redistributing the code snippet,
+this software, or modified works of those.  The "AS-IS BASIS" clause
+above still applies in these cases.
+
+(In short, you can freely use this software to package YOUR software
+and the Apache License will not apply for YOURS.)
+
+
+=begin POD_ESCAPE_ZipPerlApp
+
+=cut
+
+
+package ZipPerlApp::__ARCHIVED__;
+__DATA__
+PK
+     ˆ¶eZªú —RN  RN     zipperlapp.pl#!/usr/bin/perl
+# zipperlapp - Make an executable perl script bundle using zip archive
+#
+# https://github.com/yoiwa-personal/zipperlapp/
+#
+# Copyright 2019 Yutaka OIWA <yutaka@oiwa.jp>.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+use 5.024;
+use strict;
+use Fcntl;
+use File::Basename "basename";
+use File::Temp "tempfile";
+use File::Find ();
+use Data::Dumper ();
+use Getopt::Long qw(:config posix_default bundling permute);
+use Pod::Usage;
+use Cwd;
+
+use FindBin;
+use if (! scalar %ZipPerlApp::), lib => $FindBin::Bin;
+use ZipTiny;
+
+our $VERSION = "1.0";
+
+my $debug = 0;
+my $compression = 0;
+my $bzipcompression = 0;
+my $out = undef;
+my $mainopt = undef;
+my $copy_pod = 0;
+my $quote_pod = 0;
+my $protect_pod = 1;
+my $textarchive = 0;
+my $base64 = 0;
+
+GetOptions(
+	   'compress|C:9' => \$compression,
+	   'bzip' => \$bzipcompression,
+	   'output|o:s' => \$out,
+	   'main|m:s' => \$mainopt,
+	   'copy-pod|p' => \$copy_pod,
+	   'quote-pod' => \$quote_pod,
+	   'protect-pod' => sub { $protect_pod = 2 },
+	   'no-protect-pod' => sub { $protect_pod = 0 },
+	   'base64|B' => \$base64,
+	   'text-archive|T' => \$textarchive,
+	   'debug:i' => \$debug,
+	   'help' => sub { pod2usage(1) }) or do { pod2usage(2); exit 1 };
+
+if (!!$quote_pod + !!$base64 >= 2) {
+    print STDERR "Error: --quote_pod and --base64 are exclusive\n";
+    pod2usage(2);
+}
+if (!!$compression + !!$bzipcompression >= 2) {
+    print STDERR "Error: --compression and --bzip are exclusive\n";
+    pod2usage(2);
+}
+unless ($compression =~ /\A[0-9]|Zb\z/) {
+    print STDERR "Error: bad --compress=$compression (should be 0 to 9)";
+    pod2usage(2);
+}
+
+if ($compression eq 'Zb' || $bzipcompression) {
+    $compression = 'bzip';
+}
+
+pod2usage(2) if @ARGV == 0;
+
+my $cwd = getcwd;
+
+my $possible_out = undef;
+my $main = undef;
+my $dir = undef;
+
+if (scalar @ARGV == 1 && -d $ARGV[0]) {
+    $dir = $ARGV[0];
+    $possible_out = $ARGV[0];
+    # guess main later
+}
+if (defined $mainopt) {
+    $main = $mainopt;
+    $possible_out = $main;
+} elsif (!defined $dir) {
+    for (@ARGV) {
+	if ($_ =~ /\.pl$/) {
+	    die "two main files" if (defined $main);
+	    $main = $_;
+	    $possible_out = $_;
+	    say "using $main as main script";
+	}
+    }
+}
+
+if (! defined $out) {
+    if (!$possible_out or $possible_out eq '.') {
+	die "cannot guess name";
+    }
+    $out = basename $possible_out; # for a while
+    $out =~ s/(\.pl)?$/\.plz/;
+    say "output is set to: $out";
+}
+
+my $zipdir = $cwd;
+
+if (defined $dir) {
+    chdir $dir or die "chdir: $!";
+    my $zipdir = getcwd;
+    my @PLs;
+    my @PMs;
+    File::Find::find
+	({wanted => sub {
+	      my $f = $File::Find::name;
+	      $f =~ s(^\./)()s;
+	      return if $f =~ /^\./s;
+	      push @PLs, $f if $f =~ /\.pl$/s;
+	      push @PMs, $f if $f =~ /\.pm$/s;
+	  }
+	 }, '.');
+    if (!defined $main) {
+	die "cannot guess main script" unless @PLs == 1;
+	$main = $PLs[0];
+	say "using $dir/$main as main script";
+    }
+    @ARGV = (@PLs, @PMs);
+}
+
+die "no main files guessed" unless (defined $main);
+if (! grep { $_ eq $main } @ARGV) {
+    die "no main file $main will be contained in archive";
+}
+
+my $pod = "";
+my $podsw = 0;
+
+# consult main script for pod and she-bang
+
+open MAIN, "<", $main or die "read main: $!";
+my $shebang = '';
+while (($_ = <MAIN>) =~ /^#/) {
+    $shebang .= $_;
+}
+
+if ($copy_pod) {
+    while (defined $_) {
+	$podsw = 1 if(/^=[a-z]/);
+	$podsw = 0 if(/^=cut\b/);
+	$pod .= $_ if $podsw;
+	$_ = <MAIN>;
+    }
+    # more treatment will be later
+}
+
+$shebang = "#!/usr/bin/perl\n" if $shebang eq '';
+
+my $mode = ($shebang =~ /\A#!/ ? 0777 : 0666);
+
+@ARGV = ZipTiny::prepare_zip(@ARGV);
+
+# initial try with minimal quotations
+
+my ($headerdata, $zipdata) = create_sfx(\@ARGV, $shebang, $pod, $textarchive, $compression, $base64, 0, ($protect_pod == 2));
+
+if ((($protect_pod == 1) || $quote_pod) && quote_required($zipdata)) {
+    # retry with quotations
+    print STDERR "detected unquoted pods -- retry with quoting/protection enabled\n" if $debug;
+    $protect_pod = !$quote_pod;
+    ($headerdata, $zipdata) = create_sfx(\@ARGV, $shebang, $pod, $textarchive, $compression, $base64, $quote_pod, !$quote_pod);
+}
+
+print "writing to $out\n";
+
+chdir $zipdir or die "chdir: $!";
+
+sysopen(O, $out, O_WRONLY | O_CREAT | O_TRUNC, $mode) or die "write: $!";
+
+print O $headerdata or die "$!";
+print O $zipdata or die "$!";
+close O or die "$!";
+exit(0);
+
+sub create_sfx {
+    my ($files, $shebang, $pod, $textarchive, $compression, $base64, $quote, $protect_pod) = @_;
+    my (@files) = @$files;
+    
+    my $sfx_embed = (!$textarchive && !$quote && !$base64);
+
+    # prepare launching script
+
+    print STDERR "create_sfx: b64 $base64, quote $quote, protect $protect_pod\n" if $debug;
+    if ($protect_pod) {
+	$pod .= "\n=begin POD_ESCAPE_ZipPerlApp\n\n=cut\n"
+	  if ($pod ne "" or $protect_pod > 1);
+    } elsif ($pod ne "") {
+	$pod .= "=cut\n";
+    }
+    if ($base64) {
+	$quote = 'base64';
+    } elsif ($quote) {
+	$quote = 'quote';
+    }
+
+    # prepare launching script
+
+    our %config = (main => $main, dequote => $quote);
+    our @features = ("MAIN",
+		     ($quote ? ("QUOTE") : ()),
+		     ($compression ? ("COMPRESSION") : ()),
+		     ($bzipcompression ? ("BZIPCOMPRESSION") : ()),
+		     ($textarchive ? ("TEXTARCHIVE") : ("ZIPARCHIVE")),
+		    );
+
+    our $script = &script(\@features,
+			  CONFIG => Data::Dumper->Dump([\%config], ['*CONFIG']),
+			  PKGNAME => 'ZipPerlApp::__ARCHIVED__',
+			  POD => $pod);
+
+    my $header = $shebang . "\n" . $script;
+
+    my $zipdata;
+    
+    if ($textarchive) {
+	$zipdata = create_textarchive(@files);
+    } else {
+	my $offset = 0;
+	if ($sfx_embed) {
+	    $offset = length($header);
+	}
+	print STDERR "offset -> $offset\n" if $debug;
+	$zipdata = ZipTiny::make_zip(\@files,
+			  COMPRESS => $compression,
+			  OFFSET => $offset,
+			  HEADER => "",
+			  TRAILER => "");
+    }
+    if ($quote eq 'quote') {
+	$zipdata =~ s/^=/==/mg;
+	# quoting breaks archive structure.
+	$zipdata =~ s/PK([\0-\37][\0-\37])/PK\0$1/g;
+    } elsif ($quote eq 'base64') {
+	require MIME::Base64;
+	$zipdata = MIME::Base64::encode_base64($zipdata);
+    }
+
+    return $header, $zipdata;
+}
+
+sub create_textarchive() {
+    my $zipdat = "";
+    local $/;
+    for my $e (@_) {
+	my $sep;
+	my $fname = $e->{FNAME};
+	my $dat = $e->{CONTENT};
+	for(;;) {
+	    $sep = sprintf("----TEXTARCHIVE-%08d----------------", int(rand(100000000)));
+	    last if index($dat, $sep) == -1 and index($fname, $sep) == -1;
+	}
+	$zipdat .= "TXD\n$sep\n$fname\n$sep\n$dat\n$sep\n";
+    }
+    $zipdat .= "TXE\n";
+    return $zipdat;
+}
+
+sub quote_required {
+    my ($zipdat) = @_;
+    my $count = ($zipdat =~ m/\n=/s);
+    return $count;
+}
+
+#my $embpod_maybe = ($zipdat =~ /^(=[a-zA-Z])/m);
+
+
+sub script () {
+    my ($features, %replace) = @_;
+    my $script = &script_body();
+
+    1 while $script =~ s[^#BEGIN\ ([A-Z]+)\n(.*?)^#END\ \1\n]
+			[grep ($_ eq $1, @$features) ? $2 : ""]mseg;
+    $script =~ s/@@([A-Z]+)@@/%replace{$1}/eg;
+    return $script;
+}
+
+sub script_body () { <<'EOS'; }
+# This script is packaged by zipperlapp
+use 5.024;
+no utf8;
+use strict;
+package @@PKGNAME@@;
+
+our %source;
+#BEGIN COMPRESSION
+my $zlib_loaded = 0;
+#END COMPRESSION
+#BEGIN BZIPCOMPRESSION
+my $bzlib_loaded = 0;
+#END BZIPCOMPRESSION
+our @@CONFIG@@
+
+sub fatal {
+    die("error processing zipped script: @_")
+}
+
+sub read_data {
+    my $len = $_[0];
+    return '' if $len == 0;
+    my $dat;
+    read(DATA, $dat, $len);
+    fatal "data truncated" if length($dat) != $len;
+    return $dat;
+}
+
+sub prepare {
+    use bytes;
+#BEGIN QUOTE
+    if (my $quote = $CONFIG{dequote}) {
+        local $/;
+        my $zipdat = <DATA>;
+        close DATA;
+        if ($quote eq 'base64') {
+            require MIME::Base64;
+            $zipdat = MIME::Base64::decode_base64($zipdat);
+        } elsif ($quote eq 'quote') {
+            $zipdat =~ s/PK\0([\0-\37][\0-\37])/PK$1/g;
+            $zipdat =~ s/^==/=/mg;
+        }
+        open DATA, "<", \$zipdat or fatal "scalar IO failed.";
+    }
+#END QUOTE
+
+    for(;;) {
+	my $hdr = read_data(4);
+#BEGIN ZIPARCHIVE
+        # This function assumes a "correct" zip archive,
+        # using per-file headers instead of the central archive.
+	if ($hdr eq "PK\3\4") {
+	    # per_file zip header
+	    my (undef, $flags, $comp, undef, undef, $crc, 
+                $csize, $size, $fnamelen, $extlen) =
+                unpack("vvvvvVVVvv", read_data(26));
+	    fatal "unsupported: deferred length" if ($flags & 0x8 != 0);
+	    my $fname = read_data($fnamelen);
+	    my $ext = read_data($extlen);
+	    my $dat = read_data($csize);
+	    if ($comp == 0) {
+		fatal "malformed data: bad length" if $csize != $size;
+#BEGIN COMPRESSION
+	    } elsif ($comp == 8) {
+		unless ($zlib_loaded) {
+		    require IO::Uncompress::RawInflate;
+		    require Compress::Zlib;
+		    $zlib_loaded = 1;
+		}
+		open my $fh, "<", \$dat or fatal "string IO failed.";
+		my $buf = '';
+		my $z = IO::Uncompress::RawInflate->new($fh, Transparent => 0)
+		  or fatal "IO::Uncompress::RawInflate failed: $IO::Uncompress::Inflate::InflateError\n";
+		my $status = $z->read($buf, $size);
+		fatal "Inflate failed: length mismatch" if $status != $size;
+		fatal "Inflate failed: crc mismatch" unless Compress::Zlib::crc32($buf), $crc;
+		$dat = $buf;
+#END COMPRESSION
+#BEGIN BZIPCOMPRESSION
+	    } elsif ($comp == 12) {
+		unless ($bzlib_loaded) {
+		    require IO::Uncompress::Bunzip2;
+		    require Compress::Zlib;
+		    $bzlib_loaded = 1;
+		}
+		open my $fh, "<", \$dat or fatal "string IO failed.";
+		my $buf = '';
+		my $z = IO::Uncompress::Bunzip2->new($fh)
+		  or fatal "IO::Uncompress::Bunzip2: $IO::Uncompress::Bunzip2::Bunzip2Error\n";
+		my $status = $z->read($buf, $size);
+		fatal "Inflate failed: length mismatch" if $status != $size;
+		fatal "Inflate failed: crc mismatch" unless Compress::Zlib::crc32($buf), $crc;
+		$dat = $buf;
+#END BZIPCOMPRESSION
+	    } else {
+		fatal "unknown compression";
+	    }
+
+	    $source{$fname} = $dat;
+	    next;
+	} elsif ($hdr eq "PK\1\2") {
+	    last; # central directory found. exiting.
+	} elsif ($hdr eq "PK\5\6") {
+	    fatal "malformed or empty archive";
+	}
+#END ZIPARCHIVE
+#BEGIN TEXTARCHIVE
+	if ($hdr eq "TXD\n") {
+	    (my $bar = <DATA>) ne '' or fatal "malformed archive";
+	    my ($fname, $dat);
+	    {
+		local $/ = "\n" . $bar;
+		chomp ($fname = <DATA>);
+                chomp ($dat = <DATA>);
+	    }
+	    $source{$fname} = $dat;
+	    next;
+	} elsif ($hdr eq "TXE\n") {
+	    last;
+	}
+#END TEXTARCHIVE
+	fatal "malformed data";
+    }
+    close DATA;
+}
+
+sub provide {
+    my ($self, $fname) = @_;
+    if (exists($source{$fname})) {
+	my $str = $source{$fname};
+	open my $fh, "<", \$str or fatal "string IO failed.";
+	return \("#line 1 " . __FILE__  . "/$fname\n"), $fh;
+    }
+    return undef;
+}
+
+prepare();
+unshift @INC, \&provide;
+
+#BEGIN MAIN
+package main {
+    my $main = $CONFIG{main};
+    @@PKGNAME@@::fatal "missing main module in archive" unless exists $@@PKGNAME@@::source{$main};
+    do $main;
+    die $@ if $@;
+}
+#END MAIN
+@@POD@@
+
+package @@PKGNAME@@;
+__DATA__
+EOS
+
+=head1 NAME
+
+zipperlapp - Make an executable perl script bundle using zip archive
+
+=head1 SYNOPSIS
+
+  zipperlapp [options] {directory | file ...}
+
+  Options:
+    --main              -m module    specify main entry module
+    --output=file       -o file      output file
+    --compress[={0-9}]  -C[{0-9}]    apply compression
+    --base64            -B           encode with BASE64
+    --text-archive      -T           use text-based archive format
+    --copy-pod          -p           copy pod from main module
+    --protect-pod
+    --quote-pod
+    --help                           show help
+
+=head1 DESCRIPTION
+
+This program bundles several Perl module files and wraps them as an
+"executable" zip archive.  An output file can be invoked as a Perl
+script, or (if a source file contains a C<"#!"> line) as a directly
+executable command.  Also, it can be handled by (almost every) zip
+archiver as an "sfx" file.
+
+Inside Perl scripts, all files contained in the archive is put in the
+top of the searched library set.  The program can simply use C<use> or
+C<require> statements to load the contained modules, without modifying
+the C<@INC> variable.
+
+=head1 OPTIONS
+
+=head2 INPUT/OUTPUT OPTIONS
+
+=over 8
+
+=item B<--main, -m>
+
+Specify the main module which is automatically "require"-d.  Also, a
+"she-bang" line and continuous comment lines at the top of main module
+are copied to the output.
+
+If one and only one script with extension C<'.pl'> is contained in the
+input set of modules, it is automatically detected.  Otherwise, the
+main module must be explicitly specified.
+
+=item B<--output, -o>
+
+Specify the name of the output file.
+
+If omitted, either the name of the source directory or the base name
+of the main module is taken, with a postfix C<'.plz'> is appended.
+
+It is always safe to specify the output file.
+
+=back
+
+=head2 ARCHIVE OPTIONS
+
+=over 8
+
+=item B<--compress>, B<-C>
+
+Specify the compression level for the Deflate algorithm.
+
+If C<-C> is specified without a digit, the highest level 9 is set.
+
+If not specified at all, the files are not compressed.
+It makes the content of the script almost transparently visible.
+Also, the script will not load zlib and other libraries run-time.
+
+Outputs generated without C<-C> options will not contain decompression
+functionality, that means you need to add C<-0> or similar options
+when you modify the contents with zip archivers.
+
+=item B<--base64, -B>
+
+It will encode the embedded ZIP archive with Base64 encoding.  It
+makes the script about 40% larger and also loses zip-transparent
+behavior as an sfx file, in trade for making the output script
+completely ASCII-clean.
+
+=item B<--text-archive, -T>
+
+It will use its own plaintext archive format for storing modules.
+The output will not be compatible with zip archivers.
+
+Output scripts generated with this option will be plaintext, if all
+input modules are plaintext in ASCII or some specific ASCII-compatible
+encoding.  In addition to that, it is easier to modify its content by
+hand, because the format uses no byte-oriented structure.
+
+This format will be useful when (1) you need to edit module sources
+embedded in outputs by text editors, or (2) when the whole source code
+must be transparently visible for auditing or inspections (if even
+C<-C0> is unsatisfactory).
+
+The option combination with C<-B> is possible, but it is not very
+meaningful.
+
+=back
+
+=head2 POD HANDLING OPTIONS
+
+=over 8
+
+=item B<--copy-pod, -p>
+
+If specified, it will copy all pod (Perl's plain old document format)
+sections in the main module to the output script.
+
+Alternatively, when compression (-C) is not used, it is likely that
+any pod-using modules may see pod sections from all of embedded
+modules within the zip file structure.  If only your main module
+contains a pod, you may be possibly depend on that "behavior" and not
+using this option, although it is not a guaranteed behavior.
+
+=item B<--protect-pod>
+
+Unless either compression (-C) or Base64 encoding (-B) is used, pod
+processors may see pod sections embedded in the original source
+scripts, within the zip archive; It may either be a good or not a good
+thing.
+
+If C<--protect-pod> is specified, the command will insert a small
+snippet of Pod to the output so that most pod processors will skip
+such "ghost" of pods.  The process is done only when it is actually
+needed.
+
+This option is automatically enabled when C<--copy-pod> is used.
+If unwanted, you can specify C<--no-protect-pod>.
+
+=item B<--quote-pod>
+
+It will tweak the embedded ZIP archive so that the encoded script will
+not contain any active pod specification.  The tweak is performed only
+when it is really required, but if done, the output will loose
+zip-transparency.
+
+In most circumstances, C<--protect-pod> or C<-C> is enough, or
+C<--base64> is more reliable.
+
+=back
+
+=head2 ARGUMENTS
+
+=over 8
+
+=item B<directory>
+
+If there are only one argument and it is a name of directory, All
+C<*.pl>/C<*.pm> files under that directory (recursively) are included.
+The directory name itself is truncated.
+
+=item B<files>
+
+Otherwise, all files specified in the argument are included.
+
+=back
+
+=head1 APIS
+
+There are currently no APIs visible to user scripts except import
+hooks.  Package C<ZipPerlApp> is provided in the zipped script, so if
+you need to change some behavior upon packaging, something like
+
+    use FindBin;
+    use if (! scalar %ZipPerlApp::), lib => $FindBin::Bin;
+
+or
+
+    BEGIN {
+        if (! scalar %ZipPerlApp::) {
+            require FindBin;
+            require lib $FindBin::Bin;
+        }
+    }
+
+can be used.
+
+=head1 LIMITATIONS
+
+=over 2
+
+=item *
+
+Only pure Perl scripts or modules can be loaded from zip archive. For
+example, autoloading (*.al) or dynamic loading (*.so, *.dll) will not
+be available.
+
+=item *
+
+C<__FILE__> tokens in the archived file will have virtual values of
+C<"I<archivename>/I<modulename>">, which does not exist in the real
+file system.  This also holds for the "main script" to be referred to.
+It means that the common technique for making a "dual-use"
+module/script
+
+    if (__FILE__ eq $0)
+
+will not work.  Instead, please provide a short entry script as a main
+script.
+
+=item *
+
+For compactness (and minimal dependency only to core modules), an
+embedded parser for zip archives is extremely simple.  It can not
+parse archives with any advanced features or partially-broken
+archives.  If you modify the packed archive using usual zip archivers,
+be aware of that.
+
+=item *
+
+All files are decoded into the memory at the beginning of the program
+execution.  It is not wise to include unneeded files into the archive.
+
+=back
+
+=head1 IMPLEMENTATION
+
+A zip archive of module files are stored in the C<__DATA__> section.
+A minimal parser for Zip archives is embedded to the output script,
+and it will extract the source codes of all modules to an on-memory
+storage at the start-up.  An "import hook" subroutine is put into
+Perl's C<@INC> facility to load those modules by C<require> or C<use>.
+
+This enables use of C<__DATA__> sections in each included module.
+
+=head1 DEPENDENCIES
+
+Zipped scripts generated by this command will not depend on any
+external modules, except those included in the Core modules of Perl
+distributions as of version 5.24.1.
+
+This command itself is depending on the C<zip> command from Info-Zip.
+It must be available in the command search path.
+
+=head1 REFERENCE
+
+L<Homepage|https://www.github.com/yoiwa-personal/zipperlapp>
+
+L<Python's "zipapp" implementation|https://docs.python.org/en/3/library/zipapp.html>
+
+=head1 AUTHOR/COPYRIGHT
+
+Copyright 2019 Yutaka OIWA <yutaka@oiwa.jp>.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+L<http://www.apache.org/licenses/LICENSE-2.0>
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+As a special exception to the Apache License, outputs of this
+software, which contain a code snippet copied from this software, may
+be used and distributed under terms of your choice, so long as the
+sole purpose of these works is not redistributing the code snippet,
+this software, or modified works of those.  The "AS-IS BASIS" clause
+above still applies in these cases.
+
+(In short, you can freely use this software to package YOUR software
+and the Apache License will not apply for YOURS.)
+
+=cut
+PK
+     Æ§eZπ•åj  j  
+   ZipTiny.pm# ZipTiny: a tiny implementation of zip archive creation,
+# - implemented only with Perl core modules.
+# - supporting SFX headers and trailers (or zip comments).
+
+use 5.032;
+use strict;
+package ZipTiny;
+use bytes;
+use IO::Compress::RawDeflate;
+use Compress::Zlib;
+
+# read a single file and prepare for archiving
+
+sub make_zipdata {
+    # arguments:
+    #   (file_name) -> compress this file.
+    #   (entry_name, real_name) -> compress real_name, store as entry_name
+    #   (entry_name, filehandle) -> compress filehandle, store as entry_name
+    #   (entry_name, \$string) -> compress content of $string, store as entry_name
+    #   (entry_name, \$string, modtime) -> ditto with modification time modtime (unix timestamp)
+
+    my $closure;
+    my ($entname, $content, $modtime) = @_;
+    $content = $entname unless defined $content;
+    my $fname = $entname;
+    if (ref($content) eq '') {
+	# filename
+	my $fname = $content;
+	open ($closure, "<", $content) or die "cannot open $fname: $!";
+	$content = $closure;
+	 # fallthrough
+    }
+    if (ref($content) eq "IO" || ref($content) eq "GLOB") {
+	local $/;
+	$! = undef;
+	$modtime = (stat($content))[9];
+	$content = <$content>;
+	die "cannot read $fname: $!" if $!;
+    } elsif (ref($content) eq 'SCALAR') {
+        $content = $$content . "";
+    } else {
+	die "bad argument to make_zipdata";
+    }
+    $modtime = time() if !defined $modtime;
+    if (defined $closure) {
+	close $closure or die "cannot close $fname: $!";
+    }
+    return {FNAME => $entname,
+	    CONTENT => $content,
+	    MTIME => $modtime};
+}
+
+# convert unix timestamp to FAT/MSDOS format used in zip archive.
+# depending on TZ setting.
+
+sub dosdate ($) {
+    my ($unixtime) = (@_);
+    my ($s, $m, $h, $d, $my, $y) = localtime $unixtime;
+
+    return 0 if ($y < 80);
+
+    my $time = ($h << 11) | ($m << 5) |  ($s >> 1);
+    my $date = (($y - 80) << 9) | (($my + 1) << 5) | ($d);
+
+    return ((($date & 0xffff) << 16) | ($time & 0xffff));
+}
+
+# prepare for archiving multiple files.
+# Input: a list of list reference of argument for &make_zipdata
+
+sub prepare_zip {
+    my @out = ();
+    for my $e (@_) {
+	if (ref $e eq 'HASH') {
+	    push @out, $e;
+	} elsif (ref $e eq 'ARRAY') {
+	    my @e = @$e;
+	    push @out, make_zipdata(@e);
+	} else {
+	    push @out, make_zipdata($e);
+	}
+    }
+    return @out;
+}
+
+# make a zip archive.
+# mandatory argument: a list reference of list reference of argument for &make_zipdata.
+# keyword arguments:
+#   COMPRESS: zlib compression levels (1-9), 0 for no compression, 'bzip' for bzip2 compression.
+#   HEADER: data prepended to archive
+#   OFFSET: size of data to be prepented to archive (in addition to HEADER)
+#   TRAILER: comment field of zip file, up to 65535 bytes.
+
+sub make_zip {
+    my ($entries, @options) = @_;
+    my %options = { COMPRESS => 9,
+		    HEADER => "",
+		    TRAILER => "",
+		    OFFSET => 0};
+    %options = ( %options, @options );
+
+    my $offset = $options{OFFSET};
+    my $pos = $offset;
+    my $out = "";
+    my $gheader_accumulate = "";
+    my $fcount = 0;
+
+    my @entries = @$entries;
+    
+    $out .= $options{HEADER};
+
+    for my $e (@entries) {
+	$pos = length($out) + $offset;
+	
+	if (ref $e eq 'ARRAY') {
+	    my @e = @$e;
+	    $e = make_zipdata(@e);
+	}
+
+	my $name = $e->{FNAME};
+	my $content = $e->{CONTENT};
+	my $modtime = $e->{MTIME};
+
+	my $crc = Compress::Zlib::crc32($content);
+	my $cdata = $content;
+	my $compressmethod = 0;
+	my $versionrequired = 10;
+	my $flags = 0;
+
+	my $compressflag = $options{COMPRESS};
+	if (lc $compressflag eq 'bzip') {
+	    require IO::Compress::Bzip2;
+	    IO::Compress::Bzip2::bzip2(\$content, \$cdata)
+		or die "bzip2 compression failed";
+	    ($compressmethod, $versionrequired, $flags) = (12, 46, 0);
+	} elsif ($compressflag > 0) {
+	    IO::Compress::RawDeflate::rawdeflate(\$content, \$cdata, -Level => $compressflag)
+		or die "rawdeflate failed";
+	    ($compressmethod, $versionrequired) = (8, 20);
+	    $flags = ($compressflag > 7) ? 1 : ($compressflag > 2) ? 0 : 2;
+	}
+
+	# undo compression if it is not shrunk
+	if (length($content) <= length($cdata)) {
+	    $cdata = $content;
+	    ($compressmethod, $versionrequired, $flags) = (0, 10, 0);
+	}
+	$flags = (($flags << 1) & 6);
+	my $header = pack("VvvvVVVVvv",
+			  0x04034b50,
+			  $versionrequired,
+			  $flags,
+			  $compressmethod, 
+			  dosdate($modtime),
+			  $crc,
+			  length $cdata,
+			  length $content,
+			  length $name,
+			  0 # extra field len
+			 ) . $name;
+	my $gheader = pack("VvvvvVVVVvvvvvVV",
+			   0x02014b50,
+			   0x031e, # version made by: 3.0 Unix
+			   $versionrequired,
+			   $flags,
+			   $compressmethod,
+			   dosdate($modtime),
+			   $crc,
+			   length $cdata,
+			   length $content,
+			   length $name,
+			   0, # extra field len
+			   0, # file commen length
+			   0, # disk number,
+			   0, # int file attr,
+			   0100644 << 16, # ext file attr: file, -rw-r--r--
+			   $pos
+			 ) . $name;
+	
+	$out .= $header;
+	$out .= $cdata;
+	$gheader_accumulate .= $gheader;
+	$fcount++;
+    }
+
+    $pos = length($out) + $offset;
+    my $trailer = $options{TRAILER};
+    my $ecd = pack("VvvvvVVv",
+		   0x06054b50,
+		   0,
+		   0,
+		   $fcount,
+		   $fcount,
+		   length $gheader_accumulate,
+		   $pos,
+		   length $trailer);
+    $out .= $gheader_accumulate;
+    $out .= $ecd;
+    $out .= $trailer;
+    return $out;
+}
+
+if ($0 eq __FILE__) {
+    print make_zip([["1.dat", \"data 1"],
+		    ["2.dat", \"data 2"], [$0]],
+		   COMPRESS => ($ARGV[0] // 9), HEADER => "#!!", TRAILER => "!!#");
+}
+
+1;
+PK
+     ˆ¶eZªú —RN  RN             §Å,  zipperlapp.plPK
+     Æ§eZπ•åj  j  
+           §Åâz  ZipTiny.pmPK      s   ê    
