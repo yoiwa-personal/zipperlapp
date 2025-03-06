@@ -1,3 +1,6 @@
 zipperlapp: zipperlapp.pl ZipTiny.pm
-	./zipperlapp.pl -p -o $@ $^
+	./zipperlapp.pl -p -C -o $@ $^
+	./zipperlapp -p -C -o $@ $^
+	./zipperlapp -p -C -o $@ $^
 
+# bootstrap as a test
