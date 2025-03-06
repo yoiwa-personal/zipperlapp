@@ -16,6 +16,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+#
+# As a special exception to the Apache License, outputs of this
+# software, which contain a code snippet copied from this software, may
+# be used and distributed under terms of your choice, so long as the
+# sole purpose of these works is not redistributing the code snippet,
+# this software, or modified works of those.  The "AS-IS BASIS" clause
+# above still applies in these cases.
 
 use 5.024;
 use strict;
@@ -32,7 +39,7 @@ use FindBin;
 use if (! scalar %ZipPerlApp::), lib => $FindBin::Bin;
 use ZipTiny;
 
-our $VERSION = "1.0";
+our $VERSION = "1.99.1";
 
 my $debug = 0;
 my $compression = 0;

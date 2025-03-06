@@ -21,7 +21,7 @@ See `Makefile` for how to regenerate the packed file.
 
 ## AUTHOR/COPYRIGHT
 
-Copyright 2019 Yutaka OIWA <yutaka@oiwa.jp>.
+Copyright 2019-2025 Yutaka OIWA <yutaka@oiwa.jp>.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.

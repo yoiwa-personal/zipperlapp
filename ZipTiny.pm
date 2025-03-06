@@ -2,12 +2,14 @@
 # - implemented only with Perl core modules.
 # - supporting SFX headers and trailers (or zip comments).
 
-use 5.032;
+use 5.024;
 use strict;
 package ZipTiny;
 use bytes;
 use IO::Compress::RawDeflate;
 use Compress::Zlib;
+
+our $VERSION = '1.0';
 
 # read a single file and prepare for archiving
 
