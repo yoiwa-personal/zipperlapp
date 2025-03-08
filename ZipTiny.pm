@@ -4,16 +4,18 @@
 
 use 5.024;
 use strict;
-package ZipTiny;
 use bytes;
 use IO::Compress::RawDeflate;
 use Compress::Zlib;
 
+package ZipTiny;
+
 our $VERSION = '1.0';
+our $DEBUG = 0;
 
 # read a single file and prepare for archiving
-
 sub make_zipdata {
+
     # arguments:
     #   (file_name) -> compress this file.
     #   (entry_name, real_name) -> compress real_name, store as entry_name
@@ -85,6 +87,42 @@ sub prepare_zip {
     return @out;
 }
 
+sub compress_entry {
+    my ($ent, $compressflag) = @_;
+
+    return if exists $ent->{CDATA};
+
+    my $content = $ent->{CONTENT};
+    my $cdata = $content;
+
+    my $compressmethod = 0;
+    my $versionrequired = 10;
+    my $flags = 0;
+
+    if (lc $compressflag eq 'bzip') {
+	require IO::Compress::Bzip2;
+	IO::Compress::Bzip2::bzip2(\$content, \$cdata)
+	    or die "bzip2 compression failed";
+	($compressmethod, $versionrequired, $flags) = (12, 46, 0);
+    } elsif ($compressflag > 0) {
+	IO::Compress::RawDeflate::rawdeflate(\$content, \$cdata, -Level => $compressflag)
+	    or die "rawdeflate failed";
+	($compressmethod, $versionrequired) = (8, 20);
+	$flags = ($compressflag > 7) ? 1 : ($compressflag > 2) ? 0 : 2;
+    }
+    printf STDERR "compressing $ent->{FNAME}: %d -> %d\n", length($content), length($cdata) if $DEBUG;
+    # undo compression if it is not shrunk
+    if (length($content) <= length($cdata)) {
+	$cdata = $content;
+	($compressmethod, $versionrequired, $flags) = (0, 10, 0);
+    }
+
+    $ent->{CDATA} = $cdata;
+    $ent->{COMPRESSMETHOD} = $compressmethod;
+    $ent->{VERSIONREQUIRED} = $versionrequired;
+    $ent->{FLAGS} = $flags;
+}
+
 # make a zip archive.
 # mandatory argument: a list reference of list reference of argument for &make_zipdata.
 # keyword arguments:
@@ -124,29 +162,14 @@ sub make_zip {
 	my $modtime = $e->{MTIME};
 
 	my $crc = Compress::Zlib::crc32($content);
-	my $cdata = $content;
-	my $compressmethod = 0;
-	my $versionrequired = 10;
-	my $flags = 0;
 
-	my $compressflag = $options{COMPRESS};
-	if (lc $compressflag eq 'bzip') {
-	    require IO::Compress::Bzip2;
-	    IO::Compress::Bzip2::bzip2(\$content, \$cdata)
-		or die "bzip2 compression failed";
-	    ($compressmethod, $versionrequired, $flags) = (12, 46, 0);
-	} elsif ($compressflag > 0) {
-	    IO::Compress::RawDeflate::rawdeflate(\$content, \$cdata, -Level => $compressflag)
-		or die "rawdeflate failed";
-	    ($compressmethod, $versionrequired) = (8, 20);
-	    $flags = ($compressflag > 7) ? 1 : ($compressflag > 2) ? 0 : 2;
-	}
+	compress_entry($e, $options{COMPRESS});
 
-	# undo compression if it is not shrunk
-	if (length($content) <= length($cdata)) {
-	    $cdata = $content;
-	    ($compressmethod, $versionrequired, $flags) = (0, 10, 0);
-	}
+	my $cdata = $e->{CDATA};
+	my $compressmethod = $e->{COMPRESSMETHOD};
+	my $versionrequired = $e->{VERSIONREQUIRED};
+	my $flags = $e->{FLAGS};
+
 	$flags = (($flags << 1) & 6);
 	my $header = pack("VvvvVVVVvv",
 			  0x04034b50,

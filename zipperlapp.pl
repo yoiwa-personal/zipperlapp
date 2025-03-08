@@ -83,30 +83,112 @@ if ($compression eq 'Zb' || $bzipcompression) {
     $compression = 'bzip';
 }
 
-pod2usage(2) if @ARGV == 0;
+if (@ARGV == 0) {
+    if (defined $mainopt) {
+	unshift @ARGV, ($mainopt);
+    } else {
+	pod2usage(2);
+    }
+}
+
+$ZipTiny::DEBUG = $debug;
 
 my $cwd = getcwd;
 
 my $possible_out = undef;
 my $main = undef;
 my $dir = undef;
+my $maintype = 0;
 
-if (scalar @ARGV == 1 && -d $ARGV[0]) {
-    $dir = $ARGV[0];
-    $possible_out = $ARGV[0];
-    # guess main later
+# determine main file and output name
+# argument types:
+#   type 1: a single directory dir, no main specified
+#     -> include all files in dir, search for the main file (single .pl), output dir.plz
+#   type 2: a set of files
+#     -> specified files included, first argument must be .pl file, output first.plz
+#   type 3: main file specified
+#     -> specified files included, main file must be included, output main.plz
+
+my @files = ();
+my %enames = {};
+
+sub canonicalize_filename {
+    my ($fname, $ismain) = @_;
+    die "$fname: name is absolute\n" if $fname =~ m@^/@s;
+    $fname =~ s@^(\./)+@@s;
+    while ($fname =~ s@/./@/@s) {}
+    while ($fname =~ s@(/[^/]+/../)@/@s) {}
+    die "$fname: name contains ..\n" if $fname =~ m@(^|/)../@s;
+    return ($fname, $fname);
 }
+
+sub add_file {
+    my ($fname, $trim) = @_;
+    # behavior of main mode:
+    #  1: add if *.pl, duplication is error
+    #  2: add if first
+    #  3: noop
+
+    my ($fname, $ename) = canonicalize_filename($fname);
+    die "cannot find $fname: $!" unless -e $fname;
+    die "$fname is not a plain file" unless -f $fname;
+    if (exists $enames{$ename}) {
+	if ($fname ne $enames{$ename}) {
+	    die "duplicated files: $fname and $enames{$ename} will be same name in the archive";
+	} else {
+	    # skip;
+	}
+    } else {
+	$ename =~ s(^\Q$trim\E)()s if defined $trim;
+	if ($maintype == 1) {
+	    if ($ename =~ /\.pl$/s) {
+		die "found two .pl files: $main and $ename\n" if defined $main;
+		$main = $ename;
+	    }
+	} elsif ($maintype == 2) {
+	    $main = $ename unless defined $main;
+	    $possible_out = $ename unless defined $possible_out;
+	}
+	$enames{$ename} = $fname;
+	push @files, [$fname, $ename];
+    }
+}
+
+sub add_dir {
+    my ($fname, $trim) = @_;
+    File::Find::find
+	({wanted => sub {
+	      my $f = $File::Find::name;
+	      return if $f =~ m((^|\/)\.[^\/]*$)s;
+	      add_file($f, $trim) if $f =~ /\.p[lm]$/s;
+	  },
+	  no_chdir => 1
+	 }, $fname);
+}
+
 if (defined $mainopt) {
     $main = $mainopt;
     $possible_out = $main;
-} elsif (!defined $dir) {
-    for (@ARGV) {
-	if ($_ =~ /\.pl$/) {
-	    die "two main files" if (defined $main);
-	    $main = $_;
-	    $possible_out = $_;
-	    say "using $main as main script";
-	}
+    $maintype = 3;
+}
+
+if (-d $ARGV[0]) {
+    die "if the first file is a directory, it must be the only argument" unless (scalar @ARGV == 1);
+    $dir = $ARGV[0];
+    $possible_out = $ARGV[0];
+    $maintype = 1;
+} else {
+    $maintype = 2;
+}
+
+for (@ARGV) {
+    if (-f $_) {
+	add_file($_);
+    } elsif (-d $_) {
+	s@\/+$@@s;
+	add_dir($_, ($maintype == 1 ? "$dir/" : undef));
+    } else {
+	die "unknown type of argument: $_\n";
     }
 }
 
@@ -118,42 +200,34 @@ if (! defined $out) {
     $out =~ s/(\.pl)?$/\.plz/;
     say "output is set to: $out";
 }
+if ($maintype != 3) {
+    say "main file set to $main";
+}
 
 my $zipdir = $cwd;
 
-if (defined $dir) {
-    chdir $dir or die "chdir: $!";
-    my $zipdir = getcwd;
-    my @PLs;
-    my @PMs;
-    File::Find::find
-	({wanted => sub {
-	      my $f = $File::Find::name;
-	      $f =~ s(^\./)()s;
-	      return if $f =~ /^\./s;
-	      push @PLs, $f if $f =~ /\.pl$/s;
-	      push @PMs, $f if $f =~ /\.pm$/s;
-	  }
-	 }, '.');
-    if (!defined $main) {
-	die "cannot guess main script" unless @PLs == 1;
-	$main = $PLs[0];
-	say "using $dir/$main as main script";
-    }
-    @ARGV = (@PLs, @PMs);
+die "no main files guessed" unless (defined $main);
+
+if (! exists $enames{$main}) {
+    die "no main file $main will be contained in archive";
 }
 
-die "no main files guessed" unless (defined $main);
-if (! grep { $_ eq $main } @ARGV) {
-    die "no main file $main will be contained in archive";
+for my $f (@files) {
+    printf "%s <- %s\n", $f->[1], $f->[0];
 }
 
 my $pod = "";
 my $podsw = 0;
 
+@files = ZipTiny::prepare_zip(@files);
+
 # consult main script for pod and she-bang
 
-open MAIN, "<", $main or die "read main: $!";
+# this depends on internal data structure of ZipTiny
+my ($mainent) = grep { $_->{FNAME} eq $main } @files;
+
+die unless defined $mainent;
+open MAIN, "<", \($mainent->{CONTENT}) or die "read main: $!";
 my $shebang = '';
 while (($_ = <MAIN>) =~ /^#/) {
     $shebang .= $_;
@@ -173,17 +247,15 @@ $shebang = "#!/usr/bin/perl\n" if $shebang eq '';
 
 my $mode = ($shebang =~ /\A#!/ ? 0777 : 0666);
 
-@ARGV = ZipTiny::prepare_zip(@ARGV);
-
 # initial try with minimal quotations
 
-my ($headerdata, $zipdata) = create_sfx(\@ARGV, $shebang, $pod, $textarchive, $compression, $base64, 0, ($protect_pod == 2));
+my ($headerdata, $zipdata) = create_sfx(\@files, $shebang, $pod, $textarchive, $compression, $base64, 0, ($protect_pod == 2));
 
 if ((($protect_pod == 1) || $quote_pod) && quote_required($zipdata)) {
     # retry with quotations
     print STDERR "detected unquoted pods -- retry with quoting/protection enabled\n" if $debug;
     $protect_pod = !$quote_pod;
-    ($headerdata, $zipdata) = create_sfx(\@ARGV, $shebang, $pod, $textarchive, $compression, $base64, $quote_pod, !$quote_pod);
+    ($headerdata, $zipdata) = create_sfx(\@files, $shebang, $pod, $textarchive, $compression, $base64, $quote_pod, !$quote_pod);
 }
 
 print "writing to $out\n";
@@ -267,6 +339,7 @@ sub create_textarchive() {
     my $zipdat = "";
     local $/;
     for my $e (@_) {
+	# this depends on internal data structure of ZipTiny
 	my $sep;
 	my $fname = $e->{FNAME};
 	my $dat = $e->{CONTENT};
