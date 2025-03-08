@@ -437,12 +437,6 @@ use strict;
 package @@PKGNAME@@;
 
 our %source;
-#BEGIN COMPRESSION
-my $zlib_loaded = 0;
-#END COMPRESSION
-#BEGIN BZIPCOMPRESSION
-my $bzlib_loaded = 0;
-#END BZIPCOMPRESSION
 our @@CONFIG@@
 
 sub fatal {
@@ -494,34 +488,24 @@ sub prepare {
 		fatal "malformed data: bad length" if $csize != $size;
 #BEGIN COMPRESSION
 	    } elsif ($comp == 8) {
-		unless ($zlib_loaded) {
-		    require IO::Uncompress::RawInflate;
-		    require Compress::Zlib;
-		    $zlib_loaded = 1;
-		}
-		open my $fh, "<", \$dat or fatal "string IO failed.";
+                require Compress::Raw::Zlib;
+                my $i = new Compress::Raw::Zlib::Inflate(-WindowBits => - &Compress::Raw::Zlib::MAX_WBITS, -CRC32 => 1) or die;
 		my $buf = '';
-		my $z = IO::Uncompress::RawInflate->new($fh, Transparent => 0)
-		  or fatal "IO::Uncompress::RawInflate failed: $IO::Uncompress::Inflate::InflateError\n";
-		my $status = $z->read($buf, $size);
-		fatal "Inflate failed: length mismatch" if $status != $size;
-		fatal "Inflate failed: crc mismatch" unless Compress::Zlib::crc32($buf) == $crc;
+                my $r = $i->inflate($dat, $buf, 1);
+                die "Inflate failed: error $r" if $r != &Compress::Raw::Zlib::Z_STREAM_END;
+		fatal "Inflate failed: length mismatch" if length($buf) != $size;
+		fatal "Inflate failed: crc mismatch" unless $i->crc32() == $crc;
 		$dat = $buf;
 #END COMPRESSION
 #BEGIN BZIPCOMPRESSION
 	    } elsif ($comp == 12) {
-		unless ($bzlib_loaded) {
-		    require IO::Uncompress::Bunzip2;
-		    require Compress::Zlib;
-		    $bzlib_loaded = 1;
-		}
-		open my $fh, "<", \$dat or fatal "string IO failed.";
+                require Compress::Raw::Bzip2;
+                my $i = new Compress::Raw::Bunzip2(0, 0, 0, 0, 0);
 		my $buf = '';
-		my $z = IO::Uncompress::Bunzip2->new($fh)
-		  or fatal "IO::Uncompress::Bunzip2: $IO::Uncompress::Bunzip2::Bunzip2Error\n";
-		my $status = $z->read($buf, $size);
-		fatal "Inflate failed: length mismatch" if $status != $size;
-		fatal "Inflate failed: crc mismatch" unless Compress::Zlib::crc32($buf), $crc;
+                my $r = $i->bzinflate($dat, $buf);
+                die "Bunzip failed: error $r" if $r != &Compress::Raw::Bzip2::BZ_STREAM_END;
+		fatal "Bunzip failed: length mismatch" if length($buf) != $size;
+		#fatal "Bunzip failed: crc mismatch" unless $i->crc32() == $crc;
 		$dat = $buf;
 #END BZIPCOMPRESSION
 	    } else {
