@@ -1,9 +1,11 @@
+COMPRESSION = -C0
+
 all: zipperlapp
 
 zipperlapp: zipperlapp.pl ZipTiny.pm
-	./zipperlapp.pl -p -C -o $@ $^
-	./zipperlapp -p -C -o $@ $^
-	./zipperlapp -p -C -o $@ $^
+	./zipperlapp.pl -p $(COMPRESSION) -o $@ $^
+	./zipperlapp -p $(COMPRESSION) -o $@ $^
+	./zipperlapp -p $(COMPRESSION) -o $@ $^
 
 # runnint three times bootstrap as a test
 #  1st to generate

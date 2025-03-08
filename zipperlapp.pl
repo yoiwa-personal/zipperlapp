@@ -48,22 +48,30 @@ my $out = undef;
 my $mainopt = undef;
 my $copy_pod = 0;
 my $quote_pod = 0;
-my $protect_pod = 1;
+my $protect_pod = 2;
 my $textarchive = 0;
 my $base64 = 0;
+my $trimlibname = 1;
+my $searchincludedir = 1;
+my @includedir = ();
 
 GetOptions(
 	   'compress|C:9' => \$compression,
 	   'bzip' => \$bzipcompression,
 	   'output|o:s' => \$out,
 	   'main|m:s' => \$mainopt,
-	   'copy-pod|p' => \$copy_pod,
-	   'quote-pod' => \$quote_pod,
-	   'protect-pod' => sub { $protect_pod = 2 },
-	   'no-protect-pod' => sub { $protect_pod = 0 },
+	   'copy-pod|p!' => \$copy_pod,
+	   'quote-pod!' => \$quote_pod,
+	   'protect-pod!' => \$protect_pod,
 	   'base64|B' => \$base64,
 	   'text-archive|T' => \$textarchive,
+
+	   'includedir|I:s' => \@includedir,
+	   'search-includedir!' => \$searchincludedir,
+	   'trim-includedir!' => \$trimlibname,
+
 	   'debug:+' => \$debug,
+
 	   'help' => sub { pod2usage(1) }) or do { pod2usage(2); exit 1 };
 
 if (!!$quote_pod + !!$base64 >= 2) {
@@ -119,11 +127,24 @@ sub canonicalize_filename {
     while ($fname =~ s@/./@/@s) {}
     while ($fname =~ s@(/[^/]+/../)@/@s) {}
     die "$fname: name contains ..\n" if $fname =~ m@(^|/)../@s;
-    return ($fname, $fname);
+
+    my $ename = $fname;
+    if ($trimlibname) {
+	for my $l (@includedir) {
+	    my $libdir = "$l/";
+	    my $length = length($libdir);
+	    if (substr($ename, 0, length($libdir)) eq $libdir) {
+		$ename = substr($ename, $length);
+		last;
+	    }
+	}
+    }
+
+    return wantarray ? ($fname, $ename) : $ename;
 }
 
 sub add_file {
-    my ($fname, $trim) = @_;
+    my ($fname) = @_;
     # behavior of main mode:
     #  1: add if *.pl, duplication is error
     #  2: add if first
@@ -139,7 +160,6 @@ sub add_file {
 	    # skip;
 	}
     } else {
-	$ename =~ s(^\Q$trim\E)()s if defined $trim;
 	if ($maintype == 1) {
 	    if ($ename =~ /\.pl$/s) {
 		die "found two .pl files: $main and $ename\n" if defined $main;
@@ -150,7 +170,7 @@ sub add_file {
 	    $possible_out = $ename unless defined $possible_out;
 	}
 	$enames{$ename} = $fname;
-	push @files, [$fname, $ename];
+	push @files, [$ename, $fname];
     }
 }
 
@@ -166,6 +186,10 @@ sub add_dir {
 	 }, $fname);
 }
 
+for (@includedir) {
+    $_ =~ s@/+$@@s;
+}
+
 if (defined $mainopt) {
     $main = $mainopt;
     $possible_out = $main;
@@ -175,19 +199,39 @@ if (defined $mainopt) {
 if (-d $ARGV[0]) {
     die "if the first file is a directory, it must be the only argument" unless (scalar @ARGV == 1);
     $dir = $ARGV[0];
-    $possible_out = $ARGV[0];
-    $maintype = 1;
+    $dir =~ s@/+$@@s;
+    $possible_out = $dir;
+    unshift @includedir, ($dir);
+    $searchincludedir = 0;
+    $trimlibname = 1;
+    $maintype = 1 unless $maintype == 3;
 } else {
-    $maintype = 2;
+    $maintype = 2 unless $maintype == 3;
+}
+
+if (defined $mainopt) {
+    $main = canonicalize_filename($main);
 }
 
 for (@ARGV) {
+    unless (-e $_) {
+	if ($searchincludedir) {
+	    for my $l (@includedir) {
+		my $ff = "$l/$_";
+		if (-e $ff) {
+		    $_ = $ff;
+		    last;
+		}
+	    }
+	}
+    }
     if (-f $_) {
 	add_file($_);
     } elsif (-d $_) {
 	s@\/+$@@s;
 	add_dir($_, ($maintype == 1 ? "$dir/" : undef));
     } else {
+	die "file not found: $_" unless -e $_;
 	die "unknown type of argument: $_\n";
     }
 }
@@ -200,8 +244,8 @@ if (! defined $out) {
     $out =~ s/(\.pl)?$/\.plz/;
     say "output is set to: $out";
 }
-if ($maintype != 3) {
-    say "main file set to $main";
+if ($maintype != 3 || $mainopt ne $main) {
+    say "main file set to: $main";
 }
 
 my $zipdir = $cwd;
@@ -213,7 +257,7 @@ if (! exists $enames{$main}) {
 }
 
 for my $f (@files) {
-    printf "%s <- %s\n", $f->[1], $f->[0];
+    printf "%s <- %s\n", $f->[0], $f->[1];
 }
 
 my $pod = "";
@@ -249,9 +293,9 @@ my $mode = ($shebang =~ /\A#!/ ? 0777 : 0666);
 
 # initial try with minimal quotations
 
-my ($headerdata, $zipdata) = create_sfx(\@files, $shebang, $pod, $textarchive, $compression, $base64, 0, ($protect_pod == 2));
+my ($headerdata, $zipdata) = create_sfx(\@files, $shebang, $pod, $textarchive, $compression, $base64, 0, ($protect_pod == 1));
 
-if ((($protect_pod == 1) || $quote_pod) && quote_required($zipdata)) {
+if ((($protect_pod == 2) || $quote_pod) && quote_required($zipdata)) {
     # retry with quotations
     print STDERR "detected unquoted pods -- retry with quoting/protection enabled\n" if $debug;
     $protect_pod = !$quote_pod;
@@ -280,7 +324,7 @@ sub create_sfx {
     print STDERR "create_sfx: b64 $base64, quote $quote, protect $protect_pod\n" if $debug;
     if ($protect_pod) {
 	$pod .= "\n=begin POD_ESCAPE_ZipPerlApp\n\n=cut\n"
-	  if ($pod ne "" or $protect_pod > 1);
+	  if ($pod ne "" or $protect_pod == 1);
     } elsif ($pod ne "") {
 	$pod .= "=cut\n";
     }
@@ -541,6 +585,7 @@ zipperlapp - Make an executable perl script bundle using zip archive
     --base64            -B           encode with BASE64
     --text-archive      -T           use text-based archive format
     --copy-pod          -p           copy pod from main module
+    --includedir        -I           locations to find input files
     --protect-pod
     --quote-pod
     --help                           show help
@@ -573,6 +618,37 @@ are copied to the output.
 If one and only one script with extension C<'.pl'> is contained in the
 input set of modules, it is automatically detected.  Otherwise, the
 main module must be explicitly specified.
+
+=item B<--includedir, -I>
+
+Specify the locations to search input files, in addition to the current
+directory.
+If this option is specified multiple times, the files will be searched
+in order of the specifications.
+
+This option will have two kinds of separate effect; if C<'-Ilib File.pm'>
+is speficied in the command line, as an example:
+
+=over 2
+
+=item *
+
+the command will include C<'lib/File.pm'> to the archive, if C<'File.pm'>
+does not exist.  This behavior can be disabled by specifing
+C<'--no-search-includedir'>.
+
+=item *
+
+the file C<'lib/File.pm'> will be included to the archive as C<'File.pm'>,
+triming the library part of the name. This happens either when the file is
+speficied explicitly or through C<-I> option.
+This behavior can be disabled by specifing
+C<'--no-trim-includedir'>.
+
+If two or more files will share the same name after this triming,
+it will be an error and rejected.
+
+=back
 
 =item B<--output, -o>
 
