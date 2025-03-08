@@ -1,4 +1,4 @@
-COMPRESSION = -C0
+COMPRESSION = -C9
 
 all: zipperlapp
 

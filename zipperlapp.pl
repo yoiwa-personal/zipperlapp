@@ -3,7 +3,7 @@
 #
 # https://github.com/yoiwa-personal/zipperlapp/
 #
-# Copyright 2019 Yutaka OIWA <yutaka@oiwa.jp>.
+# Copyright 2019-2025 Yutaka OIWA <yutaka@oiwa.jp>.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -39,7 +39,7 @@ use FindBin;
 use if (! scalar %ZipPerlApp::), lib => $FindBin::Bin;
 use ZipTiny;
 
-our $VERSION = "1.99.1";
+our $VERSION = "1.99.3";
 
 my $debug = 0;
 my $compression = 0;
@@ -71,7 +71,7 @@ GetOptions(
 	   'search-includedir!' => \$searchincludedir,
 	   'trim-includedir!' => \$trimlibname,
 
-	   'inhibit-lib' => \$inhibit_lib,
+	   'inhibit-use-lib' => \$inhibit_lib,
 
 	   'debug:+' => \$debug,
 
@@ -178,12 +178,12 @@ sub add_file {
 }
 
 sub add_dir {
-    my ($fname, $trim) = @_;
+    my ($fname) = @_;
     File::Find::find
 	({wanted => sub {
 	      my $f = $File::Find::name;
 	      return if $f =~ m((^|\/)\.[^\/]*$)s;
-	      add_file($f, $trim) if $f =~ /\.p[lm]$/s;
+	      add_file($f) if $f =~ /\.p[lm]$/s;
 	  },
 	  no_chdir => 1
 	 }, $fname);
@@ -232,7 +232,7 @@ for (@ARGV) {
 	add_file($_);
     } elsif (-d $_) {
 	s@\/+$@@s;
-	add_dir($_, ($maintype == 1 ? "$dir/" : undef));
+	add_dir($_);
     } else {
 	die "file not found: $_" unless -e $_;
 	die "unknown type of argument: $_\n";
@@ -328,8 +328,17 @@ sub create_sfx {
 
     print STDERR "create_sfx: b64 $base64, quote $quote, protect $protect_pod\n" if $debug;
     if ($protect_pod) {
-	$pod .= "\n=begin POD_ESCAPE_ZipPerlApp\n\n=cut\n"
-	  if ($pod ne "" or $protect_pod == 1);
+	if ($pod ne "" or $protect_pod == 1) {
+	    my $podsig;
+	    while () {
+		$podsig = sprintf("POD_ESCAPE_ZipPerlApp_%08d", int(rand(100000000)));
+		last unless (grep { index($_->{CONTENT}, $podsig) != -1 or
+				      index($_->{FNAME}, $podsig) != -1 } @files);
+		print "protect_pod: signature $podsig is not well... retrying\n" if $debug >= 2;
+	    }
+	    print "protect_pod: signature $podsig\n" if $debug >= 2;
+	    $pod .= "\n=begin $podsig\n\n=cut\n";
+	}
     } elsif ($pod ne "") {
 	$pod .= "=cut\n";
     }
@@ -373,7 +382,7 @@ sub create_sfx {
 			  COMPRESS => $compression,
 			  OFFSET => $offset,
 			  HEADER => "",
-			  TRAILER => "");
+			  TRAILERCOMMENT => "");
     }
     if ($quote eq 'quote') {
 	$zipdata =~ s/^=/==/mg;
@@ -398,7 +407,9 @@ sub create_textarchive() {
 	for(;;) {
 	    $sep = sprintf("----TEXTARCHIVE-%08d----------------", int(rand(100000000)));
 	    last if index($dat, $sep) == -1 and index($fname, $sep) == -1;
+	    print STDERR "create_textarchive: separator $sep is not well... retrying\n" if $debug >= 2;
 	}
+	print STDERR "create_textarchive: separator $sep for $fname\n" if $debug >= 2;
 	$zipdat .= "TXD\n$sep\n$fname\n$sep\n$dat\n$sep\n";
     }
     $zipdat .= "TXE\n";
@@ -572,6 +583,7 @@ package main {
     die $@ if $@;
 }
 #END MAIN
+
 @@POD@@
 
 package @@PKGNAME@@;
@@ -776,7 +788,7 @@ C<--base64> is more reliable.
 
 =over 8
 
-=item B<--inhibit-lib>
+=item B<--inhibit-use-lib>
 
 An experimental option.  It will nullify effect of C<'use lib ...'>,
 so that local files not included in the archive will not be read.

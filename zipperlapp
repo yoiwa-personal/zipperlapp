@@ -3,7 +3,7 @@
 #
 # https://github.com/yoiwa-personal/zipperlapp/
 #
-# Copyright 2019 Yutaka OIWA <yutaka@oiwa.jp>.
+# Copyright 2019-2025 Yutaka OIWA <yutaka@oiwa.jp>.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -31,9 +31,10 @@ use strict;
 package ZipPerlApp::__ARCHIVED__;
 
 our %source;
+my $zlib_loaded = 0;
 our %CONFIG = (
-            'dequote' => 0,
-            'main' => 'zipperlapp.pl'
+            'main' => 'zipperlapp.pl',
+            'dequote' => 0
           );
 
 
@@ -68,6 +69,20 @@ sub prepare {
 	    my $dat = read_data($csize);
 	    if ($comp == 0) {
 		fatal "malformed data: bad length" if $csize != $size;
+	    } elsif ($comp == 8) {
+		unless ($zlib_loaded) {
+		    require IO::Uncompress::RawInflate;
+		    require Compress::Zlib;
+		    $zlib_loaded = 1;
+		}
+		open my $fh, "<", \$dat or fatal "string IO failed.";
+		my $buf = '';
+		my $z = IO::Uncompress::RawInflate->new($fh, Transparent => 0)
+		  or fatal "IO::Uncompress::RawInflate failed: $IO::Uncompress::Inflate::InflateError\n";
+		my $status = $z->read($buf, $size);
+		fatal "Inflate failed: length mismatch" if $status != $size;
+		fatal "Inflate failed: crc mismatch" unless Compress::Zlib::crc32($buf) == $crc;
+		$dat = $buf;
 	    } else {
 		fatal "unknown compression";
 	    }
@@ -103,6 +118,7 @@ package main {
     do $main;
     die $@ if $@;
 }
+
 =head1 NAME
 
 zipperlapp - Make an executable perl script bundle using zip archive
@@ -414,1146 +430,61 @@ above still applies in these cases.
 
 (In short, you can freely use this software to package YOUR software
 and the Apache License will not apply for YOURS.)
-
-
-=begin POD_ESCAPE_ZipPerlApp
 
 =cut
 
 
 package ZipPerlApp::__ARCHIVED__;
 __DATA__
-PK
-     |†hZ+Kyv`  v`     zipperlapp.pl#!/usr/bin/perl
-# zipperlapp - Make an executable perl script bundle using zip archive
-#
-# https://github.com/yoiwa-personal/zipperlapp/
-#
-# Copyright 2019 Yutaka OIWA <yutaka@oiwa.jp>.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-# As a special exception to the Apache License, outputs of this
-# software, which contain a code snippet copied from this software, may
-# be used and distributed under terms of your choice, so long as the
-# sole purpose of these works is not redistributing the code snippet,
-# this software, or modified works of those.  The "AS-IS BASIS" clause
-# above still applies in these cases.
-
-use 5.024;
-use strict;
-use Fcntl;
-use File::Basename "basename";
-use File::Temp "tempfile";
-use File::Find ();
-use Data::Dumper ();
-use Getopt::Long qw(:config posix_default bundling permute);
-use Pod::Usage;
-use Cwd;
-
-use FindBin;
-use if (! scalar %ZipPerlApp::), lib => $FindBin::Bin;
-use ZipTiny;
-
-our $VERSION = "1.99.1";
-
-my $debug = 0;
-my $compression = 0;
-my $bzipcompression = 0;
-my $out = undef;
-my $mainopt = undef;
-my $copy_pod = 0;
-my $quote_pod = 0;
-my $protect_pod = 2;
-my $textarchive = 0;
-my $base64 = 0;
-my $trimlibname = 1;
-my $searchincludedir = 1;
-my @includedir = ();
-my $inhibit_lib = 0;
-
-GetOptions(
-	   'compress|C:9' => \$compression,
-	   'bzip' => \$bzipcompression,
-	   'output|o:s' => \$out,
-	   'main|m:s' => \$mainopt,
-	   'copy-pod|p!' => \$copy_pod,
-	   'quote-pod!' => \$quote_pod,
-	   'protect-pod!' => \$protect_pod,
-	   'base64|B' => \$base64,
-	   'text-archive|T' => \$textarchive,
-
-	   'includedir|I:s' => \@includedir,
-	   'search-includedir!' => \$searchincludedir,
-	   'trim-includedir!' => \$trimlibname,
-
-	   'inhibit-lib' => \$inhibit_lib,
-
-	   'debug:+' => \$debug,
-
-	   'help' => sub { pod2usage(1) }) or do { pod2usage(2); exit 1 };
-
-if (!!$quote_pod + !!$base64 >= 2) {
-    print STDERR "Error: --quote_pod and --base64 are exclusive\n";
-    pod2usage(2);
-}
-if (!!$compression + !!$bzipcompression >= 2) {
-    print STDERR "Error: --compression and --bzip are exclusive\n";
-    pod2usage(2);
-}
-unless ($compression =~ /\A[0-9]|Zb\z/) {
-    print STDERR "Error: bad --compress=$compression (should be 0 to 9)";
-    pod2usage(2);
-}
-
-if ($compression eq 'Zb' || $bzipcompression) {
-    $compression = 'bzip';
-}
-
-if (@ARGV == 0) {
-    if (defined $mainopt) {
-	unshift @ARGV, ($mainopt);
-    } else {
-	pod2usage(2);
-    }
-}
-
-$ZipTiny::DEBUG = $debug;
-
-my $cwd = getcwd;
-
-my $possible_out = undef;
-my $main = undef;
-my $dir = undef;
-my $maintype = 0;
-
-# determine main file and output name
-# argument types:
-#   type 1: a single directory dir, no main specified
-#     -> include all files in dir, search for the main file (single .pl), output dir.plz
-#   type 2: a set of files
-#     -> specified files included, first argument must be .pl file, output first.plz
-#   type 3: main file specified
-#     -> specified files included, main file must be included, output main.plz
-
-my @files = ();
-my %enames = {};
-
-sub canonicalize_filename {
-    my ($fname, $ismain) = @_;
-    die "$fname: name is absolute\n" if $fname =~ m@^/@s;
-    $fname =~ s@^(\./)+@@s;
-    while ($fname =~ s@/./@/@s) {}
-    while ($fname =~ s@(/[^/]+/../)@/@s) {}
-    die "$fname: name contains ..\n" if $fname =~ m@(^|/)../@s;
-
-    my $ename = $fname;
-    if ($trimlibname) {
-	for my $l (@includedir) {
-	    my $libdir = "$l/";
-	    my $length = length($libdir);
-	    if (substr($ename, 0, length($libdir)) eq $libdir) {
-		$ename = substr($ename, $length);
-		last;
-	    }
-	}
-    }
-
-    return wantarray ? ($fname, $ename) : $ename;
-}
-
-sub add_file {
-    my ($fname) = @_;
-    # behavior of main mode:
-    #  1: add if *.pl, duplication is error
-    #  2: add if first
-    #  3: noop
-
-    my ($fname, $ename) = canonicalize_filename($fname);
-    die "cannot find $fname: $!" unless -e $fname;
-    die "$fname is not a plain file" unless -f $fname;
-    if (exists $enames{$ename}) {
-	if ($fname ne $enames{$ename}) {
-	    die "duplicated files: $fname and $enames{$ename} will be same name in the archive";
-	} else {
-	    # skip;
-	}
-    } else {
-	if ($maintype == 1) {
-	    if ($ename =~ /\.pl$/s) {
-		die "found two .pl files: $main and $ename\n" if defined $main;
-		$main = $ename;
-	    }
-	} elsif ($maintype == 2) {
-	    $main = $ename unless defined $main;
-	    $possible_out = $ename unless defined $possible_out;
-	}
-	$enames{$ename} = $fname;
-	push @files, [$ename, $fname];
-    }
-}
-
-sub add_dir {
-    my ($fname, $trim) = @_;
-    File::Find::find
-	({wanted => sub {
-	      my $f = $File::Find::name;
-	      return if $f =~ m((^|\/)\.[^\/]*$)s;
-	      add_file($f, $trim) if $f =~ /\.p[lm]$/s;
-	  },
-	  no_chdir => 1
-	 }, $fname);
-}
-
-for (@includedir) {
-    $_ =~ s@/+$@@s;
-}
-
-if (defined $mainopt) {
-    $main = $mainopt;
-    $possible_out = $main;
-    $maintype = 3;
-}
-
-if (-d $ARGV[0]) {
-    die "if the first file is a directory, it must be the only argument" unless (scalar @ARGV == 1);
-    $dir = $ARGV[0];
-    $dir =~ s@/+$@@s;
-    $possible_out = $dir;
-    unshift @includedir, ($dir);
-    $searchincludedir = 0;
-    $trimlibname = 1;
-    $maintype = 1 unless $maintype == 3;
-} else {
-    $maintype = 2 unless $maintype == 3;
-}
-
-if (defined $mainopt) {
-    $main = canonicalize_filename($main);
-}
-
-for (@ARGV) {
-    unless (-e $_) {
-	if ($searchincludedir) {
-	    for my $l (@includedir) {
-		my $ff = "$l/$_";
-		if (-e $ff) {
-		    $_ = $ff;
-		    last;
-		}
-	    }
-	}
-    }
-    if (-f $_) {
-	add_file($_);
-    } elsif (-d $_) {
-	s@\/+$@@s;
-	add_dir($_, ($maintype == 1 ? "$dir/" : undef));
-    } else {
-	die "file not found: $_" unless -e $_;
-	die "unknown type of argument: $_\n";
-    }
-}
-
-if (! defined $out) {
-    if (!$possible_out or $possible_out eq '.') {
-	die "cannot guess name";
-    }
-    $out = basename $possible_out; # for a while
-    $out =~ s/(\.pl)?$/\.plz/;
-    say "output is set to: $out";
-}
-if ($maintype != 3 || $mainopt ne $main) {
-    say "main file set to: $main";
-}
-
-my $zipdir = $cwd;
-
-die "no main files guessed" unless (defined $main);
-
-if (! exists $enames{$main}) {
-    die "no main file $main will be contained in archive";
-}
-
-for my $f (@files) {
-    printf "%s <- %s\n", $f->[0], $f->[1];
-}
-
-my $pod = "";
-my $podsw = 0;
-
-# if ($inhibit_lib) { push @files, (['lib.pm', \'1;']);
-
-@files = ZipTiny::prepare_zip(@files);
-
-# consult main script for pod and she-bang
-
-# this depends on internal data structure of ZipTiny
-my ($mainent) = grep { $_->{FNAME} eq $main } @files;
-
-die unless defined $mainent;
-open MAIN, "<", \($mainent->{CONTENT}) or die "read main: $!";
-my $shebang = '';
-while (($_ = <MAIN>) =~ /^#/) {
-    $shebang .= $_;
-}
-
-if ($copy_pod) {
-    while (defined $_) {
-	$podsw = 1 if(/^=[a-z]/);
-	$podsw = 0 if(/^=cut\b/);
-	$pod .= $_ if $podsw;
-	$_ = <MAIN>;
-    }
-    # more treatment will be later
-}
-
-$shebang = "#!/usr/bin/perl\n" if $shebang eq '';
-
-my $mode = ($shebang =~ /\A#!/ ? 0777 : 0666);
-
-# initial try with minimal quotations
-
-my ($headerdata, $zipdata) = create_sfx(\@files, $shebang, $pod, $textarchive, $compression, $base64, 0, ($protect_pod == 1));
-
-if ((($protect_pod == 2) || $quote_pod) && quote_required($zipdata)) {
-    # retry with quotations
-    print STDERR "detected unquoted pods -- retry with quoting/protection enabled\n" if $debug;
-    $protect_pod = !$quote_pod;
-    ($headerdata, $zipdata) = create_sfx(\@files, $shebang, $pod, $textarchive, $compression, $base64, $quote_pod, !$quote_pod);
-}
-
-print "writing to $out\n";
-
-chdir $zipdir or die "chdir: $!";
-
-sysopen(O, $out, O_WRONLY | O_CREAT | O_TRUNC, $mode) or die "write: $!";
-
-print O $headerdata or die "$!";
-print O $zipdata or die "$!";
-close O or die "$!";
-exit(0);
-
-sub create_sfx {
-    my ($files, $shebang, $pod, $textarchive, $compression, $base64, $quote, $protect_pod) = @_;
-    my (@files) = @$files;
-
-    my $sfx_embed = (!$textarchive && !$quote && !$base64);
-
-    # prepare launching script
-
-    print STDERR "create_sfx: b64 $base64, quote $quote, protect $protect_pod\n" if $debug;
-    if ($protect_pod) {
-	$pod .= "\n=begin POD_ESCAPE_ZipPerlApp\n\n=cut\n"
-	  if ($pod ne "" or $protect_pod == 1);
-    } elsif ($pod ne "") {
-	$pod .= "=cut\n";
-    }
-    if ($base64) {
-	$quote = 'base64';
-    } elsif ($quote) {
-	$quote = 'quote';
-    }
-
-    # prepare launching script
-
-    our %config = (main => $main, dequote => $quote);
-    $config{inhibit_lib} = 1 if $inhibit_lib;
-
-    our @features = ("MAIN",
-		     ($quote ? ("QUOTE") : ()),
-		     ($compression ? ("COMPRESSION") : ()),
-		     ($bzipcompression ? ("BZIPCOMPRESSION") : ()),
-		     ($textarchive ? ("TEXTARCHIVE") : ("ZIPARCHIVE")),
-		     ($inhibit_lib ? ("INHIBITLIB") : ()),
-		    );
-
-    our $script = &script(\@features,
-			  CONFIG => Data::Dumper->Dump([\%config], ['*CONFIG']),
-			  PKGNAME => 'ZipPerlApp::__ARCHIVED__',
-			  POD => $pod);
-
-    my $header = $shebang . "\n" . $script;
-
-    my $zipdata;
-
-    if ($textarchive) {
-	$zipdata = create_textarchive(@files);
-    } else {
-	my $offset = 0;
-	if ($sfx_embed) {
-	    $offset = length($header);
-	}
-	print STDERR "offset -> $offset\n" if $debug;
-	$zipdata = ZipTiny::make_zip(\@files,
-			  COMPRESS => $compression,
-			  OFFSET => $offset,
-			  HEADER => "",
-			  TRAILER => "");
-    }
-    if ($quote eq 'quote') {
-	$zipdata =~ s/^=/==/mg;
-	# quoting breaks archive structure.
-	$zipdata =~ s/PK([\0-\37][\0-\37])/PK\0$1/g;
-    } elsif ($quote eq 'base64') {
-	require MIME::Base64;
-	$zipdata = MIME::Base64::encode_base64($zipdata);
-    }
-
-    return $header, $zipdata;
-}
-
-sub create_textarchive() {
-    my $zipdat = "";
-    local $/;
-    for my $e (@_) {
-	# this depends on internal data structure of ZipTiny
-	my $sep;
-	my $fname = $e->{FNAME};
-	my $dat = $e->{CONTENT};
-	for(;;) {
-	    $sep = sprintf("----TEXTARCHIVE-%08d----------------", int(rand(100000000)));
-	    last if index($dat, $sep) == -1 and index($fname, $sep) == -1;
-	}
-	$zipdat .= "TXD\n$sep\n$fname\n$sep\n$dat\n$sep\n";
-    }
-    $zipdat .= "TXE\n";
-    return $zipdat;
-}
-
-sub quote_required {
-    my ($zipdat) = @_;
-    my $count = ($zipdat =~ m/\n=/s);
-    return $count;
-}
-
-sub script () {
-    my ($features, %replace) = @_;
-    my $script = &script_body();
-
-    1 while $script =~ s[^#BEGIN\ ([A-Z]+)\n(.*?)^#END\ \1\n]
-			[grep ($_ eq $1, @$features) ? $2 : ""]mseg;
-    $script =~ s/@@([A-Z]+)@@/%replace{$1}/eg;
-    return $script;
-}
-
-sub script_body () { <<'EOS'; }
-# This script is packaged by zipperlapp
-use 5.024;
-no utf8;
-use strict;
-package @@PKGNAME@@;
-
-our %source;
-#BEGIN COMPRESSION
-my $zlib_loaded = 0;
-#END COMPRESSION
-#BEGIN BZIPCOMPRESSION
-my $bzlib_loaded = 0;
-#END BZIPCOMPRESSION
-our @@CONFIG@@
-
-sub fatal {
-    die("error processing zipped script: @_")
-}
-
-sub read_data {
-    my $len = $_[0];
-    return '' if $len == 0;
-    my $dat;
-    read(DATA, $dat, $len);
-    fatal "data truncated" if length($dat) != $len;
-    return $dat;
-}
-
-sub prepare {
-    use bytes;
-#BEGIN QUOTE
-    if (my $quote = $CONFIG{dequote}) {
-        local $/;
-        my $zipdat = <DATA>;
-        close DATA;
-        if ($quote eq 'base64') {
-            require MIME::Base64;
-            $zipdat = MIME::Base64::decode_base64($zipdat);
-        } elsif ($quote eq 'quote') {
-            $zipdat =~ s/PK\0([\0-\37][\0-\37])/PK$1/g;
-            $zipdat =~ s/^==/=/mg;
-        }
-        open DATA, "<", \$zipdat or fatal "scalar IO failed.";
-    }
-#END QUOTE
-
-    for(;;) {
-	my $hdr = read_data(4);
-#BEGIN ZIPARCHIVE
-        # This function assumes a "correct" zip archive,
-        # using per-file headers instead of the central archive.
-	if ($hdr eq "PK\3\4") {
-	    # per_file zip header
-	    my (undef, $flags, $comp, undef, undef, $crc, 
-                $csize, $size, $fnamelen, $extlen) =
-                unpack("vvvvvVVVvv", read_data(26));
-	    fatal "unsupported: deferred length" if ($flags & 0x8 != 0);
-	    my $fname = read_data($fnamelen);
-	    my $ext = read_data($extlen);
-	    my $dat = read_data($csize);
-	    if ($comp == 0) {
-		fatal "malformed data: bad length" if $csize != $size;
-#BEGIN COMPRESSION
-	    } elsif ($comp == 8) {
-		unless ($zlib_loaded) {
-		    require IO::Uncompress::RawInflate;
-		    require Compress::Zlib;
-		    $zlib_loaded = 1;
-		}
-		open my $fh, "<", \$dat or fatal "string IO failed.";
-		my $buf = '';
-		my $z = IO::Uncompress::RawInflate->new($fh, Transparent => 0)
-		  or fatal "IO::Uncompress::RawInflate failed: $IO::Uncompress::Inflate::InflateError\n";
-		my $status = $z->read($buf, $size);
-		fatal "Inflate failed: length mismatch" if $status != $size;
-		fatal "Inflate failed: crc mismatch" unless Compress::Zlib::crc32($buf) == $crc;
-		$dat = $buf;
-#END COMPRESSION
-#BEGIN BZIPCOMPRESSION
-	    } elsif ($comp == 12) {
-		unless ($bzlib_loaded) {
-		    require IO::Uncompress::Bunzip2;
-		    require Compress::Zlib;
-		    $bzlib_loaded = 1;
-		}
-		open my $fh, "<", \$dat or fatal "string IO failed.";
-		my $buf = '';
-		my $z = IO::Uncompress::Bunzip2->new($fh)
-		  or fatal "IO::Uncompress::Bunzip2: $IO::Uncompress::Bunzip2::Bunzip2Error\n";
-		my $status = $z->read($buf, $size);
-		fatal "Inflate failed: length mismatch" if $status != $size;
-		fatal "Inflate failed: crc mismatch" unless Compress::Zlib::crc32($buf), $crc;
-		$dat = $buf;
-#END BZIPCOMPRESSION
-	    } else {
-		fatal "unknown compression";
-	    }
-
-	    $source{$fname} = $dat;
-	    next;
-	} elsif ($hdr eq "PK\1\2") {
-	    last; # central directory found. exiting.
-	} elsif ($hdr eq "PK\5\6") {
-	    fatal "malformed or empty archive";
-	}
-#END ZIPARCHIVE
-#BEGIN TEXTARCHIVE
-	if ($hdr eq "TXD\n") {
-	    (my $bar = <DATA>) ne '' or fatal "malformed archive";
-	    my ($fname, $dat);
-	    {
-		local $/ = "\n" . $bar;
-		chomp ($fname = <DATA>);
-                chomp ($dat = <DATA>);
-	    }
-	    $source{$fname} = $dat;
-	    next;
-	} elsif ($hdr eq "TXE\n") {
-	    last;
-	}
-#END TEXTARCHIVE
-	fatal "malformed data";
-    }
-    close DATA;
-}
-
-sub provide {
-    my ($self, $fname) = @_;
-    if (exists($source{$fname})) {
-	my $str = $source{$fname};
-	open my $fh, "<", \$str or fatal "string IO failed.";
-	return \("#line 1 " . __FILE__  . "/$fname\n"), $fh;
-    }
-    return undef;
-}
-
-prepare();
-unshift @INC, \&provide;
-
-#BEGIN MAIN
-package main {
-#BEGIN INHIBITLIB
-    $INC{'lib.pm'} = \&provide if $CONFIG{inhibit_lib};
-#END INHIBITLIB
-    my $main = $CONFIG{main};
-    @@PKGNAME@@::fatal "missing main module in archive" unless exists $@@PKGNAME@@::source{$main};
-    do $main;
-    die $@ if $@;
-}
-#END MAIN
-@@POD@@
-
-package @@PKGNAME@@;
-__DATA__
-EOS
-
-=head1 NAME
-
-zipperlapp - Make an executable perl script bundle using zip archive
-
-=head1 SYNOPSIS
-
-  zipperlapp [options] {directory | file ...}
-
-  Options:
-    --main              -m module    specify main entry module
-    --output=file       -o file      output file
-    --compress[={0-9}]  -C[{0-9}]    apply compression
-    --base64            -B           encode with BASE64
-    --text-archive      -T           use text-based archive format
-    --copy-pod          -p           copy pod from main module
-    --includedir        -I           locations to find input files
-    --protect-pod
-    --quote-pod
-    --help                           show help
-
-=head1 DESCRIPTION
-
-This program bundles several Perl module files and wraps them as an
-"executable" zip archive.  An output file can be invoked as a Perl
-script, or (if a source file contains a C<"#!"> line) as a directly
-executable command.  Also, it can be handled by (almost every) zip
-archiver as an "sfx" file.
-
-Inside Perl scripts, all files contained in the archive is put in the
-top of the searched library set.  The program can simply use C<use> or
-C<require> statements to load the contained modules, without modifying
-the C<@INC> variable.
-
-=head1 ARGUMENTS
-
-=over 8
-
-=item B<directory>
-
-If there are only one argument and it is a name of directory, All
-C<*.pl>/C<*.pm> files under that directory (recursively) are included.
-The directory name itself is truncated.
-
-=item B<files>
-
-Otherwise, all files specified in the argument are included.
-
-=back
-
-=head1 OPTIONS
-
-=head2 INPUT/OUTPUT OPTIONS
-
-=over 8
-
-=item B<--main, -m>
-
-Specify the main module which is automatically "require"-d.  Also, a
-"she-bang" line and continuous comment lines at the top of main module
-are copied to the output.
-
-If one and only one script with extension C<'.pl'> is contained in the
-input set of modules, it is automatically detected.  Otherwise, the
-main module must be explicitly specified.
-
-=item B<--includedir, -I>
-
-Specify the locations to search input files, in addition to the current
-directory.
-If this option is specified multiple times, the files will be searched
-in order of the specifications.
-
-This option will have two kinds of separate effect; if C<'-Ilib File.pm'>
-is speficied in the command line, as an example:
-
-=over 2
-
-=item *
-
-the command will include C<'lib/File.pm'> to the archive, if C<'File.pm'>
-does not exist.  This behavior can be disabled by specifing
-C<'--no-search-includedir'>.
-
-=item *
-
-the file C<'lib/File.pm'> will be included to the archive as C<'File.pm'>,
-triming the library part of the name. This happens either when the file is
-speficied explicitly or through C<-I> option.
-This behavior can be disabled by specifing
-C<'--no-trim-includedir'>.
-
-If two or more files will share the same name after this triming,
-it will be an error and rejected.
-
-=back
-
-=item B<--output, -o>
-
-Specify the name of the output file.
-
-If omitted, either the name of the source directory or the base name
-of the main module is taken, with a postfix C<'.plz'> is appended.
-
-It is always safe to specify the output file.
-
-=back
-
-=head2 ARCHIVE OPTIONS
-
-=over 8
-
-=item B<--compress>, B<-C>
-
-Specify the compression level for the Deflate algorithm.
-
-If C<-C> is specified without a digit, the highest level 9 is set.
-
-If not specified at all, the files are not compressed.
-It makes the content of the script almost transparently visible.
-Also, the script will not load zlib and other libraries run-time.
-
-Outputs generated without C<-C> options will not contain decompression
-functionality, that means you need to add C<-0> or similar options
-when you modify the contents with zip archivers.
-
-=item B<--base64, -B>
-
-It will encode the embedded ZIP archive with Base64 encoding.  It
-makes the script about 40% larger and also loses zip-transparent
-behavior as an sfx file, in trade for making the output script
-completely ASCII-clean.
-
-=item B<--text-archive, -T>
-
-It will use its own plaintext archive format for storing modules.
-The output will not be compatible with zip archivers.
-
-Output scripts generated with this option will be plaintext, if all
-input modules are plaintext in ASCII or some specific ASCII-compatible
-encoding.  In addition to that, it is easier to modify its content by
-hand, because the format uses no byte-oriented structure.
-
-This format will be useful when (1) you need to edit module sources
-embedded in outputs by text editors, or (2) when the whole source code
-must be transparently visible for auditing or inspections (if even
-C<-C0> is unsatisfactory).
-
-The option combination with C<-B> is possible, but it is not very
-meaningful.
-
-=back
-
-=head2 POD HANDLING OPTIONS
-
-=over 8
-
-=item B<--copy-pod, -p>
-
-If specified, it will copy all pod (Perl's plain old document format)
-sections in the main module to the output script.
-
-Alternatively, when compression (-C) is not used, it is likely that
-any pod-using modules may see pod sections from all of embedded
-modules within the zip file structure.  If only your main module
-contains a pod, you may be possibly depend on that "behavior" and not
-using this option, although it is not a guaranteed behavior.
-
-=item B<--protect-pod>
-
-Unless either compression (-C) or Base64 encoding (-B) is used, pod
-processors may see pod sections embedded in the original source
-scripts, within the zip archive; It may either be a good or not a good
-thing.
-
-If C<--protect-pod> is specified, the command will insert a small
-snippet of Pod to the output so that most pod processors will skip
-such "ghost" of pods.  The process is done only when it is actually
-needed.
-
-This option is automatically enabled when C<--copy-pod> is used.
-If unwanted, you can specify C<--no-protect-pod>.
-
-=item B<--quote-pod>
-
-It will tweak the embedded ZIP archive so that the encoded script will
-not contain any active pod specification.  The tweak is performed only
-when it is really required, but if done, the output will loose
-zip-transparency.
-
-In most circumstances, C<--protect-pod> or C<-C> is enough, or
-C<--base64> is more reliable.
-
-=back
-
-=head2 OTHER OPTIONS
-
-=over 8
-
-=item B<--inhibit-lib>
-
-An experimental option.  It will nullify effect of C<'use lib ...'>,
-so that local files not included in the archive will not be read.
-It will break if any system library uses C<'lib'> pragma, thus
-use of the snippet in the APIS section is recommended.
-
-=back
-
-=head1 APIS
-
-There are currently no APIs visible to user scripts except import
-hooks.  Package C<ZipPerlApp> is provided in the zipped script, so if
-you need to change some behavior upon packaging, something like
-
-    use FindBin;
-    use if (! scalar %ZipPerlApp::), lib => $FindBin::Bin;
-
-or
-
-    BEGIN {
-        if (! scalar %ZipPerlApp::) {
-            require FindBin;
-            require lib $FindBin::Bin;
-        }
-    }
-
-can be used.
-
-=head1 LIMITATIONS
-
-=over 2
-
-=item *
-
-Only pure Perl scripts or modules can be loaded from zip archive. For
-example, autoloading (*.al) or dynamic loading (*.so, *.dll) will not
-be available.
-
-=item *
-
-C<__FILE__> tokens in the archived file will have virtual values of
-C<"I<archivename>/I<modulename>">, which does not exist in the real
-file system.  This also holds for the "main script" to be referred to.
-It means that the common technique for making a "dual-use"
-module/script
-
-    if (__FILE__ eq $0)
-
-will not work.  Instead, please provide a short entry script as a main
-script.
-
-=item *
-
-For compactness (and minimal dependency only to core modules), an
-embedded parser for zip archives is extremely simple.  It can not
-parse archives with any advanced features or partially-broken
-archives.  If you modify the packed archive using usual zip archivers,
-be aware of that.
-
-=item *
-
-All files are decoded into the memory at the beginning of the program
-execution.  It is not wise to include unneeded files into the archive.
-
-=back
-
-=head1 IMPLEMENTATION
-
-A zip archive of module files are stored in the C<__DATA__> section.
-A minimal parser for Zip archives is embedded to the output script,
-and it will extract the source codes of all modules to an on-memory
-storage at the start-up.  An "import hook" subroutine is put into
-Perl's C<@INC> facility to load those modules by C<require> or C<use>.
-
-This enables use of C<__DATA__> sections in each included module.
-
-=head1 DEPENDENCIES
-
-Zipped scripts generated by this command will not depend on any
-external modules, except those included in the Core modules of Perl
-distributions as of version 5.24.1.
-
-=head1 REFERENCE
-
-L<Homepage|https://www.github.com/yoiwa-personal/zipperlapp>
-
-L<Python's "zipapp" implementation|https://docs.python.org/en/3/library/zipapp.html>
-
-=head1 AUTHOR/COPYRIGHT
-
-Copyright 2019 Yutaka OIWA <yutaka@oiwa.jp>.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-L<http://www.apache.org/licenses/LICENSE-2.0>
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
-As a special exception to the Apache License, outputs of this
-software, which contain a code snippet copied from this software, may
-be used and distributed under terms of your choice, so long as the
-sole purpose of these works is not redistributing the code snippet,
-this software, or modified works of those.  The "AS-IS BASIS" clause
-above still applies in these cases.
-
-(In short, you can freely use this software to package YOUR software
-and the Apache License will not apply for YOURS.)
-
-=cut
-PK
-     ÕzhZv?%ª  ª  
-   ZipTiny.pm# ZipTiny: a tiny implementation of zip archive creation,
-# - implemented only with Perl core modules.
-# - supporting SFX headers and trailers (or zip comments).
-
-use 5.024;
-use strict;
-use bytes;
-use IO::Compress::RawDeflate;
-use Compress::Zlib;
-
-package ZipTiny;
-
-our $VERSION = '1.0';
-our $DEBUG = 0;
-
-# read a single file and prepare for archiving
-sub make_zipdata {
-
-    # arguments:
-    #   (file_name) -> compress this file.
-    #   (entry_name, real_name) -> compress real_name, store as entry_name
-    #   (entry_name, filehandle) -> compress filehandle, store as entry_name
-    #   (entry_name, \$string) -> compress content of $string, store as entry_name
-    #   (entry_name, \$string, modtime) -> ditto with modification time modtime (unix timestamp)
-
-    my $closure;
-    my ($entname, $content, $modtime) = @_;
-    $content = $entname unless defined $content;
-    my $fname = $entname;
-    if (ref($content) eq '') {
-	# filename
-	my $fname = $content;
-	open ($closure, "<", $content) or die "cannot open $fname: $!";
-	$content = $closure;
-	 # fallthrough
-    }
-    if (ref($content) eq "IO" || ref($content) eq "GLOB") {
-	local $/;
-	$! = undef;
-	$modtime = (stat($content))[9];
-	$content = <$content>;
-	die "cannot read $fname: $!" if $!;
-    } elsif (ref($content) eq 'SCALAR') {
-        $content = $$content . "";
-    } else {
-	die "bad argument to make_zipdata";
-    }
-    $modtime = time() if !defined $modtime;
-    if (defined $closure) {
-	close $closure or die "cannot close $fname: $!";
-    }
-    return {FNAME => $entname,
-	    CONTENT => $content,
-	    MTIME => $modtime};
-}
-
-# convert unix timestamp to FAT/MSDOS format used in zip archive.
-# depending on TZ setting.
-
-sub dosdate ($) {
-    my ($unixtime) = (@_);
-    my ($s, $m, $h, $d, $my, $y) = localtime $unixtime;
-
-    return 0 if ($y < 80);
-
-    my $time = ($h << 11) | ($m << 5) |  ($s >> 1);
-    my $date = (($y - 80) << 9) | (($my + 1) << 5) | ($d);
-
-    return ((($date & 0xffff) << 16) | ($time & 0xffff));
-}
-
-# prepare for archiving multiple files.
-# Input: a list of list reference of argument for &make_zipdata
-
-sub prepare_zip {
-    my @out = ();
-    for my $e (@_) {
-	if (ref $e eq 'HASH') {
-	    push @out, $e;
-	} elsif (ref $e eq 'ARRAY') {
-	    my @e = @$e;
-	    push @out, make_zipdata(@e);
-	} else {
-	    push @out, make_zipdata($e);
-	}
-    }
-    return @out;
-}
-
-sub compress_entry {
-    my ($ent, $compressflag) = @_;
-
-    return if exists $ent->{CDATA};
-
-    my $content = $ent->{CONTENT};
-    my $cdata = $content;
-
-    my $compressmethod = 0;
-    my $versionrequired = 10;
-    my $flags = 0;
-
-    if (lc $compressflag eq 'bzip') {
-	require IO::Compress::Bzip2;
-	IO::Compress::Bzip2::bzip2(\$content, \$cdata)
-	    or die "bzip2 compression failed";
-	($compressmethod, $versionrequired, $flags) = (12, 46, 0);
-    } elsif ($compressflag > 0) {
-	IO::Compress::RawDeflate::rawdeflate(\$content, \$cdata, -Level => $compressflag)
-	    or die "rawdeflate failed";
-	($compressmethod, $versionrequired) = (8, 20);
-	$flags = ($compressflag > 7) ? 1 : ($compressflag > 2) ? 0 : 2;
-    }
-    printf STDERR "compressing $ent->{FNAME}: %d -> %d\n", length($content), length($cdata) if $DEBUG;
-    # undo compression if it is not shrunk
-    if (length($content) <= length($cdata)) {
-	$cdata = $content;
-	($compressmethod, $versionrequired, $flags) = (0, 10, 0);
-    }
-
-    $ent->{CDATA} = $cdata;
-    $ent->{COMPRESSMETHOD} = $compressmethod;
-    $ent->{VERSIONREQUIRED} = $versionrequired;
-    $ent->{FLAGS} = $flags;
-}
-
-# make a zip archive.
-# mandatory argument: a list reference of list reference of argument for &make_zipdata.
-# keyword arguments:
-#   COMPRESS: zlib compression levels (1-9), 0 for no compression, 'bzip' for bzip2 compression.
-#   HEADER: data prepended to archive
-#   OFFSET: size of data to be prepented to archive (in addition to HEADER)
-#   TRAILER: comment field of zip file, up to 65535 bytes.
-
-sub make_zip {
-    my ($entries, @options) = @_;
-    my %options = { COMPRESS => 9,
-		    HEADER => "",
-		    TRAILER => "",
-		    OFFSET => 0};
-    %options = ( %options, @options );
-
-    my $offset = $options{OFFSET};
-    my $pos = $offset;
-    my $out = "";
-    my $gheader_accumulate = "";
-    my $fcount = 0;
-
-    my @entries = @$entries;
-    
-    $out .= $options{HEADER};
-
-    for my $e (@entries) {
-	$pos = length($out) + $offset;
-	
-	if (ref $e eq 'ARRAY') {
-	    my @e = @$e;
-	    $e = make_zipdata(@e);
-	}
-
-	my $name = $e->{FNAME};
-	my $content = $e->{CONTENT};
-	my $modtime = $e->{MTIME};
-
-	my $crc = Compress::Zlib::crc32($content);
-
-	compress_entry($e, $options{COMPRESS});
-
-	my $cdata = $e->{CDATA};
-	my $compressmethod = $e->{COMPRESSMETHOD};
-	my $versionrequired = $e->{VERSIONREQUIRED};
-	my $flags = $e->{FLAGS};
-
-	$flags = (($flags << 1) & 6);
-	my $header = pack("VvvvVVVVvv",
-			  0x04034b50,
-			  $versionrequired,
-			  $flags,
-			  $compressmethod, 
-			  dosdate($modtime),
-			  $crc,
-			  length $cdata,
-			  length $content,
-			  length $name,
-			  0 # extra field len
-			 ) . $name;
-	my $gheader = pack("VvvvvVVVVvvvvvVV",
-			   0x02014b50,
-			   0x031e, # version made by: 3.0 Unix
-			   $versionrequired,
-			   $flags,
-			   $compressmethod,
-			   dosdate($modtime),
-			   $crc,
-			   length $cdata,
-			   length $content,
-			   length $name,
-			   0, # extra field len
-			   0, # file commen length
-			   0, # disk number,
-			   0, # int file attr,
-			   0100644 << 16, # ext file attr: file, -rw-r--r--
-			   $pos
-			 ) . $name;
-	
-	$out .= $header;
-	$out .= $cdata;
-	$gheader_accumulate .= $gheader;
-	$fcount++;
-    }
-
-    $pos = length($out) + $offset;
-    my $trailer = $options{TRAILER};
-    my $ecd = pack("VvvvvVVv",
-		   0x06054b50,
-		   0,
-		   0,
-		   $fcount,
-		   $fcount,
-		   length $gheader_accumulate,
-		   $pos,
-		   length $trailer);
-    $out .= $gheader_accumulate;
-    $out .= $ecd;
-    $out .= $trailer;
-    return $out;
-}
-
-if ($0 eq __FILE__) {
-    print make_zip([["1.dat", \"data 1"],
-		    ["2.dat", \"data 2"], [$0]],
-		   COMPRESS => ($ARGV[0] // 9), HEADER => "#!!", TRAILER => "!!#");
-}
-
-1;
-PK
-     |†hZ+Kyv`  v`             ¤2  zipperlapp.plPK
-     ÕzhZv?%ª  ª  
-           ¤¾’  ZipTiny.pmPK      s   ª    
+PK   MŸhZúzr"  Q`     zipperlapp.plÕ<kWÛÆ¶Ÿ£_1QH±[?€¦icÀCœÄë$˜¤=MH¼d[¶u%W’!áüö»_3	Óæ¶]÷®›Á’æ±g¿÷=óèas™&Ía5~:Ôç`¿¼ÅBÕÕïÒW^¤üOşh™yÃĞWøQ¥£$Xdj¸ŒÆğj™Ñ;*/Í‚+ßyÍ²l‘¶šÍiÍ–ÃÆ(7WqpíÕa„4¼°™OÕ¤Gñb•ÓY¦v¶¶ŸÕw¶v~P¿Â´—ê÷~é¨½=à(/Úêõ:ùQê ã'*›ùª³ğFğG¾ÔÔÏ0cGj§±¥*ØÀ•OnuFXÅK5÷V*Š3X‹C©š°2ÿÓÈ‡u‘ğaàE#_]Ã‚hÀP¿Êñ0ó µíğ4±Û)/#€ñ"ps}}İğØFœL›!7L›¯{Gİã³n ¦.o£ĞOS•ø¿-ƒ–:\)À4'’„ŞµŠåM¾e1Â{P¥¦Òx’]{	ĞDƒ4K‚á2+ KCk¶ º€ğnçLõÎ\uØ9ëÕ`Œ_zç¯úoÏÕ/ÓÓÎñy¯{¦ú§ê¨ü¼wŞëÃÓÕ9şUı³wü¼¦|@LãZ$?  ı1âìÌ÷ Lb(]ø£`Œ`]ÑtéM}5¯ü$B&~™)3ğÆ0JÌƒÌËèÍE1‡t -ê…BRä@Ô:f‰—Ùb™¥L¼ …ş…5u=F3 md¨<x#äãI+S“$3åı€5`œ!Š
+´ À×Ñ–F³;&j4‹ $Ÿ
+cX¸—"°
+á2YÄ€2f0øq'—)’y8D8ÃEÚ€"KğæçñĞğP42LÑPê¦sVï1¸jz°ÆeTšaÈé§È|ÓÈVn8ŠÔ­'»ô!eüûÅ(ÊBù	òÖjBŸÈ›Ã„CùåÚŸÏıùB¹üâYøô" ¬Vªüê¹—y­ÖóåøÅ¼|égñ"kµ^#>»®´€“ x*NƒOƒ±?ñ–¡è4Íj@é|[­·)p#?]w™>¿&ªòÔ£z‰zü.Xœ€‚ë,­Vµ¬:Tûmµ!=`µº4<¢Œˆ´ßø¹{zÂ¤ö•»İxö¬±+uæ+µ1ö‡Ë)¼ŞÚ¥GTJ(XÈÍæåÔêÚÀØğ€Ì6ás`bÀHñ%*®Á"çı~[Æ™_|µHàÕ(“—;ü2ó?eb ,h€ŒOŸäÏ@ü9àh¼¯¶ùeêS¿h.ÇÀ»‰ùrPx‡„ÄæA4†A6 |âÀ¶OBVœ ^75¾µm"Ò/ldÕ¸bJ>–&X|‰[©4ƒò	q÷en>*kzöÅª¸ù²xh&g¬JB)¶Ğß¥ Ønbá\ÃO¸ır¨×@ò‰Qj|9—…j·Ëü¥§Wca]FcÕó÷¨2åôì@å5­-âçó-ëğZYÔÕˆí[ßIzÒŸf~È4L—Cu²<ŞY¢”V¶«ê¶ŠŠmŞïTwÁ™ÚV·À9$°-ÿNÁ£pmx»ªn´Ø‹$ˆ2uvş¼{zªÜn’ÄIKÕëyGÔêõºô­Š–&×èÊ¿ˆ@~i
+çVOnK+O_á¯€Ãn.°Cö5p,Ù½¨ÊTó¢ó~«şìÃ—wÃ‹ÏÍß…`è-(ö#UÒY¼Çhÿ¶Ğê>«Ş!¤ĞÕÿMm¾ÎøòåbÓà”´ Kµí súògµjB·Ç· í‚l–[üö`¥³`’)êR@ôGöVù!¨jhX›¾át¢ÅÁğtß¾X˜UEw®QWNılD¦ƒÔhPƒ7X«š‹oX–šd«…èZtï|t!`]Šz“‹¬ÀZL¡Ô¡ÉN¦Ë¹Ä¾i‹üQf»…^X>è“ª‰“şªSÁCŠgæÅ‹­·•¹òÀÀÉşS'VÆ«ËaªÈ$EXÕîvçÏ98;¸Uà‰ĞÀùœ3#+š<'i–/q¾„§!ÍDMÍlÔ®8ß÷-Ä5½Ò¼›/ÿ&óašŒ`ìÙcòsğÅj$Td#/Š#ğîÃà³?Àæd/™¡GecB:LaŠCW¡ïÁ€Yq€óÄß[Dsô
+½!¸àÌ€@şçÏ(áóƒÍƒ”{æoÓƒ•‹F³úİş/RÎnÒl4 /ˆÎí}M*Í÷›¾k6`¬BÛ»@ŠOªFc•_šUÁÑHØğÅ‰à†»F¸m3C‚,ˆBP¹Q¢Oz,hÎæn„MĞNù?šB¸·¯øGEZV¥	ÎŸ¶ÂğÔÔV­Ü¶ŠjL?à¬ì¥¾2ş ôÒLf¹uÜŠ¡?‰Ÿ-ˆñ<ÀY’@Øù‹%|^wK~‘&DòÆcb¥;lds)3ï* ŒÜgC`à·ä#)‰ñ—ı-ğsM—…R<|æ£1ĞmwL[7ı-Šã…s—™}ÍZö×ĞZlí0Ş™ ë¯¹iã¡«ÄÕıoXL§#%O-B-½y·É–‡!…!Loøï-Ñ’8Í»®…™[#Kë–æqÔÒ¥êc*Ğ%)L0S`¥s,È¤¹IbÜ¦—Áb×ğŠùH ææœk}òµ 5/€¨Í”™”`Ä`rTv%Š`cäP‹Ä¬*²°6cš3#hw Ú1Pûiº”‡§–%zO»!èAİ¹y°X¦3QÒ5õŞˆ&}ş`Ù{-T¨8~O¦òø´ÕBVuTnPt0í·òbXãL»…;#ú¤I7V@7^4«÷/š¾İ¨¦¦­–x€©š÷@"¿ç€ÎÔò–|ö(Œf¤Ûj^Üê³c†*´¬<	ÿ1ßm­¯kU ¬¼ÃS&"Øt/ç{3|FF'íıÖ=21kÀù6öH×¡íË½™š
+r§ [ÆQ¸2î‚Q ‰ßï¸-JGœ0=·ıÒFÂÚ5A+şbÜL+j¶a£B]×„Ã[òéNø\FÒ¶^DA´uZ”{ìÜÛãëhy²&¿ÄâÄ™îªñŒ
+zkÑòº>øş€Df"–{c€j‘F#å?á6šSñÍ®<‹yE]P2±Z/¢`èrAØÁ€fEn”\hx j¡Ô”1kUäM2]¨^A¡
+F·[F—Q|±‡
+Y³*ö0ÑÜ­¦ÔÃ\áÓÙñÎÃ";:‹/0ÌjlV|bX§K„H²p9r$“¤3t%õ
+véå±Chu iVĞÂTÿ±A–æs“GMÁƒqÅSÆ´$8ıYÜ¢^®“sæ|ÌIñ N_¡Ùe/ø&ÎòåõpøŠÆ£ğ	¢D‘fÇhİ:Ğa–ïs½P…ªÎ¨²w€_oŠÉWGÛwq|aT4©Æ¶‹Ü°A¨°5*àå>NÕ^]=NP[×Û “äÇö³PÎÑ¹î®~J¯MÈH˜µ.UL•Øæ¯ò~^7óÍšºØÜŞİü€Ë6Œ‰x! _x‰? ¬j`iX]ŠYUy××¥&éÌ¯½hêèœôØ_øÑ8ÅíX¤ŸD^¨Æ^æaÚx9ÛGr ó:dpql	4¹S –°1¨·o^wŞtoÉõ¦ÙoeQBëuNŒ²ëÄ €zÓé×”»ˆ½03À Gıãóîñ¹d–´‰ïiyäzJ>sæã¢0±¹ëH`T!´‡#·«dˆ?>29Ó¥±OâŸçB8o¨ÛÉXjV=†ªÛ@ÑJóãş{¯şùCÃˆœàòi´Ì.†æÏGÎ5Ä×9˜¶Ğ?‚@ ŸÁz3
+®5‡àĞ&”ÿÈ—í>*î+êN·@}³)IŒ/0Î»Sâ	F€°fëÇ„PfëéÓ§ÌPAd¸“%+Şˆ›Ã›9¼ÀDo9Ì3 ŒŸ ïÔXÚá¸N>U.4›ë¹k„†Z!—]+d˜j:¥M^¥˜	GOA«…Êoàß¢Ú2ÃªúæÅOzc¯b Õ„Ÿ^«µÆ»‰8LÿŒx;‰£=©—G¢iS@£[„›ˆcM"IY±SHó[YRşş¿€c+1nÏÏ¯ß•­NÌ,¢É »è°3«µ¼Vz+‚ê¤«e½Ò¯Q¿šê~9í¿şU}ŸG§İÎ9ı:?}{|TcFÍågõõPI_Y1©…i H*~…¸™×/¾Ä$ue«ª3B£…Xã/£¶V ²¶àÚîÀÛ­<uœ üù£t0ìİàk!ÿä)«Òù‘kªc¡Ã7Óà¬aë|á-5|ú$‡ŸÇ×«EV³†¥I©|“+B÷"ÚúS°'ıçƒîÙQç¤;È÷ğ."ø>"CŸ‘‡‚à¸.ûTeePróæÅyeÔİ’ªñFmy¹ûz×g³<4}/5¥ºå×!÷ËÆ(Ğ•}ü6›ÇXK»-ˆ×!÷¸±\‰[1G…íºİ|’ƒ	ĞÌ9%B]47nM\s½Lk¹ÿõ¶Şu1ŸU©V­vÖÛõßœœvÏpßtMëò
+ö8|×;ùı^6Ocóî¿Î;§G¯z?D.a^Ø=í-JìÙ;~Õ;ì¿î–§©Z8Ùi_}Ã¿P{
+š°=t äEï%ÀŞã®·ñoåı…ÜÀ÷›ßr[pÙ¤ïÉ?_¢O„7í­éÁ@Öğ|0ØÔmûÏ‰Ê¬lĞ³~C¯Ù8,(6.üà­Æ¢ëä§fsŒ2¯j}hl†Õ"÷$‹!mfO&èØ“#+Ñ£ÖGyÉ4Ò	Y¿Ê) ¢‘¶õ¶îVÒ6¨Æí{—ìój+§‰Ä\E,n+ãçş‹gİsúÈSÉûWİÀ‚ï]W^Ÿvz¯»§0àp;ùSõ`iA§Š%¾„Z¼>î7÷÷›s\È#í¨! ü2ÕQGîb7Ê½Oş	¼µU¿øşÇúo^^lml7§k5A#ªŠÀG½é½érÇÓ'E¬Ú_Z-?Âš•‘ûE»kòàBÖšÅq·«ióT5·ŸÒ\¢#J
+Ä#p%7$.Õ8Üìhÿ© å—8`f–Â9½má› E¾0,ô^Ç»´{QÙİÍ™FÂ+nşYz©şxë§q½ô¢h\I âªloÉ¿jUob`*)ˆÆş§
+‚Q£iªhÄêÛ¨É7ªÏ¿J:UP‰Öìü_Ï/"lÿO8=,OĞBÿ.&
+½»æ«¦/6T-úÌ¶?ÄK^Hà2Ê(ÄĞÿš7Á˜7µnÑQK3hc›e Z«Ç`HCoä—§++ñÁ0¯*Z‹nKgš|½ÿøè°û²w|ñv§şîÃwÕ‹¨ÒøöÕºÇÏ/ÔÅöEôÂ{
+p1’Ä°v»†n™ÀS;³±¶Åu?ÌS_»ğÖ,Íƒ=üÁASC³±}ÛÔÍ5´*/ ‚ÖAØP{{›İşÙæ.Ğï‘:§Z2~-¼Ñ¥7å"Å¼ÂÓ®‹bµÌ&?ËÁ¤›:83up åPSøäï:Œ$eÙlÎä€‘„1¨ ©PB¤ZIÇ’Á—j©µ½ËMÉc9`ƒzpÀX™€Ä‡y–§âÒîz¢#T÷\»€a7-`·ªQŠiƒéŒ\•Bù˜Ô²cs“}6©`Qº¡7®<ïœwjJÄo3˜.Íê)¢(2mÚ*’È<Ü§NE>°¥Nû’ÂÒWF‚]rÔŒM2…c¸"ÆÛx&5vWãŞQÌ{¸¨vş‘#%|™¿»ßè(ëßzûc·Èg-Z¢±¿ÆUó¾ë,_n‡×ÎÀ6õbk­UÍmêÚ~Á³%7 ˜_”»b>àÜ•î	|)| {½>¼ =4nMLŒÏTÔæOrıÆè÷¾­`<'¤Ï½`‰¨…	ğe¼4]b‘ƒ]œà~ŒkWŒ×¬\N^-¥KÙ¸cÁEša®MŠªG~”%°  !^ B	p»ß_<q«ùæ(Èûß8-j¶ù+TWƒ¹ÓĞ›¦2×”¼ÕGÉ¨¦
+„áØ'>“Mä?dò@’pCûS†r¨öïtZF¨ï*îşûùçŸ¯®€Z9nwã,d[Fér±ˆİ&-A×€fa	vYvõÚúôJóVÕ*cĞNG>…Ón É
+¬&,!VZ¾]AÈ3%WÈ
+æ^5¨±WŒYğó8¤†ğÇZmÿ (nzŸxSÅf©ô|ÿGË¯ßj½´SŞjz×½h‚IÌİRË#Óæ…®²T4Û²‡ô€DP=3ÂW’<°tÀØÉãı«ár"¹b~şO÷ÃYoGşu…æ9—.E­ŒşMN@æSŞ?ˆÀĞRå6ÒÀü ?rÉ¸4‡£öÏõ6„_øŸ*Wôä¥™¤”f5KÙH¨.£åd¿·;HŸÕWˆ]¤Q«¾ß!€È=E‘¥Bq­áı×»÷pÛöN‰İ†ÿ#~;\F €v¾’Ù†ÿGÜ&PVû#Æ’ökØIÑ?ş¿²Síw˜é~Îñm¨ws­Œ€kŠbttG¾îkg*K!Œ>F wíêËØm_ìäÆö¶Áäi™—sÒ~sƒ
+ ;÷öÃÅÓ|°;ê¸ÀŸ/²U¡‰a9"TVhZ²Ğ&æÓTø´@bœ¾*fJÁõÍ™.ÁšùN;gôq¯LµoU0Òq4C‰6‹zÚİ;ÆZ7´]Òj^ÍôçéÆ±n‘l—Ì­µ¡…ÚöŒÇ_ãBÁ_ê‡SÙcÅ­y‘[¥´”ªq A£Pâ¯ğà]§‹°íè"‰1.*î£‹–·g0xÑ{İ&›:à¢øMföz¥»DÓnÅ'tÚG—ØôpãæâAn 2WbºÙDœ”ã¾ÑŸòL-Ğ0ÄŞGºšÑHßHdcç½E'”Æ±Šºu'*à%YAo«¥ip©‹0—¡o—h•¥‹
+ChYSŒc»®
+·™6h	ˆ=™°âÀ@ıçã®Èd±ÁÀøßqöÑŞVøÑqş–“£zÈ³_û'g½3E¬ßÇ|ÌçƒºÉ•Ú®«h4””“@\³Z¯ş
+ÿêsO¬¡ºî£õåJ>Jw®KÙ§¤{¬ò'SPn:híş~ÿf«şìö¼;z¯*:&·²M€t“ƒ#6˜‡Ö§Cy÷°sÖ}úDúÙ}¤ß¹hàyVl‚ãÅ‰±X>1W²¦^Øê²âg:Ùh±£t·
+Õt÷Õ0ÏÌb.Õ"²T†°;ÉsBJñœºÿ_:‹¯¶1ô¼{vtÚ;ÁC©C±(L2M¼¹ğÖ]ùhqD3¶`Âó:ñtærg/½ÈqsV.„®¥:‘ÍXÇ§ ®âKÄ9F½8‰ÃÌOÇ-+ zb9•^ºŞSG{î£‡n[¡^¬ræöpåXL4÷Ğœ«N˜ÆTÜ(SÏ<\"¥à*^8ÓLábWUÜÀ^¨çÉ'—`h8N/JQ·ä²
+áp~¸£P­dU#Sâo™É['‹:Nç¢>ŒUƒaât¥~&‡J5Aè¯ˆ]öàÿ6 É9Ú÷¸­Ğ±ó±î„Øb9×ªáa°("XoFZW _lx´‡Æ ­®¼$@ä5£tN_¾ÅÍTgxÎXı?˜LîÓÌĞzŸÎTQáhùùYJ’g\pJ¬ß*<í„!,‹æÛMú;oJõ¡e/³ü´
+üX&xh+¢áŒZÊ¢.oÉ¥ávœÜdøù*hXAá¿ğsNÑü\‹¡¨^QaVgöÀ`­O’¥MÀ˜»“·çÍşÛsøc},#”ÕqT0Às&ª×!äSÖˆÉeƒšÂâR@·+ÌàÖs–÷W—¹$.DäŠ ZÆË”dƒß`ÀŒ&ö´U.VpË¹p–è>–ÙÅŒ‘:íêG´«|´·	Şl#ìeIqXëÉ‰&Ã­Â2……êJX¥E2ÃÆ’®cö?á©‚ tCNË†q»Î¸Ş+á½ åÈ–¥ŸkärŒÇ}b83aÂ,„Í3Uq¾š/Ã,X ÄY0Ç¹DyÏœq8±GqĞÊC®`¢Èeê=ó@ùàñ„Ë€vä&0¸éù“	€·‹N¦ŞÃ½x¬«GO®í0ˆ0¶Åú¢P‰Yj¢ıOh&¿¥™yG£ö[Ç±û4ú4Ì³5Íls¦&‡aÊ¡Ç>ŸH!wô# hÎâˆZ)Õj¡^Ô€zÃÅÕ£¸~çîf»Q–Íà4tÏ´ˆØšƒUèúf­Öé™&ê¤/aşH‡¾	âzæG†€MœœÓ‘Á$^Ng01°¬P¼áü	¬”"N[eèÖƒ¤ÀŒé±9wãM2RĞ¤]iá5'Èë‘Ghã¹ ñÿÍ¢›ëK#‡¬P@ã’js‘kcAõÌƒ,Ã£„‚Árq!rƒ ç-Ñßã3ŸÒ°GÀRÀAØZâ1(p&Á'Ñ`ŸY…éXù÷XM…×Ş
+äÆ›ø¤.¬5á¶mÅ’(öwÍ‚vˆÛ5|<*aÈ.İ	Á“	Í±Òç>§u¼p'°–9cíÇ(ª!í /52ÖC³`:óAò Ï¤üœÇ@qÌ»ƒé ålk/äl£CDõ°ÔùÒOs‚¶GSŠm†øcYº¿
+¨€¾á°Y³š›á4äó`:-1Şºf¿ú@ïË&S?ò:m¦—ÎX‘*Yßg‚]yX¢·n¼0ÈV5vPæ> M÷åDrÕğƒa·Ğ_C'.ÀÍ%™Á!i§ÛuÈ³‘’2çY~t’¬–.ó«¶‰ıZ‰‚p*õAeõ®wb4‡GIQ[Lr)ÕËœœ*šCÄÈ“­Ç
+ ú,¾^H÷­¤Ğ «[4rŒÖa³€…˜|¤mGâùş˜F+F‘)®£ûƒÀ®­;gG½^}.+¶#9X÷¹µnºZï¤¹øÄ"¶-s4
+*€’ì_°³(zY À¨b±–}ø2+L½Vƒ,2n *âğ$$-9è€4BqM<·.ıìø›e_·ºÙƒò½4@ík^Cti®Œˆj çÈãÖ–)Y^ÚÌ®ò|:˜g•B±Ñ‘ÖzµĞk²ÙœáU¶H€™ÑËíœ:†[ƒÈ\0æŠpíã$å°p§šÛÈëYl† |svmòàc7Ë1WCã]Kb•…ãMĞq‘ƒ:`‹Tã2JÅéÄ#»Q¥•úš¬@€ayBâŒñ!uÓ‡} ›ğeú,-Æ—*˜psÇ
+`Eá«Îñó×½ã—`
+82°à¸Ëha¢6Ñ€’Å`b¢‚áêf*‡yãp¬Æñˆƒ¦[ÕI5"ÄÕ³­aÁáğ;!•ve„Õ˜,…k-êGU½x¼×I³b\¢˜#w:^D©“:'º´,àMa©ïì0Ê®àŠÀ\hvqt$@¢Ê›‚dL86¡»£ì¸ÆÊ*Jõ]g(±LÈ•”³a5)yW«:—t",Ïağ-±Çm
+xh9xjº×1¤ â¬<PVn5ÇæjƒKªŞÊİ˜’jŸõXµˆœ€ñÇz=+Çä8Je¸«È¢¯4èï©iÓ.ˆ¬ì;5®Ga/¤¦ÖÄ©Ÿà@éµ¦¾M¸à$—y3;Œ®ÓZ>û¯—ÁÂI—Ä¹Ó4rq<’§\°=]ö†q,1q¶¢ÀPƒ:¨ÌÈó;/†uÅHUÎğG–ì¶5•(4\F|Ş™ÙÒ=âÜapÒm|Æ¤-c˜]ûŞåı>€Æ5 alûRíñ xÂ’±qn
+Æx6Ô{~¢7À i…´Ä'dè‚DQŒÂpÍ&Æà_8E÷b´¢ÔÓu$ ¼Ò/Æ¼ÃOÀyÆ½õ#”Á'Ë´ÓD_(²IüĞd»
+Ê¸şª{ú»ZØº˜	pßÁ@0 Ré‘€]+ñ+–aˆå ¹B	4µè°65exKh¤†‰;K9EÛaÁá†a*\&?˜®RZ¢dĞ9Æ…0f‘xÓ¹‡TX¦To¨q3™²sÒ;ÓJƒIÊ‰£u©/lK¶Rr’	ñIü˜ƒÂS&ÆÒ×IÎ±Ç™Åñ%Êå‰ì³íåEùliy£Éà¥PNHWÇö<FàåL}v¨Œ¿º\À’x/G.„œû¤®ÈP9¦šÏÜc§_ü‰»ìàCêÏ{i7…½{Æº§N¯ Nù#Î^šºXwë8’`%¤i÷º÷¦wŞ)p½Ğé£:\`ı¶ —ëÉË¨R‘A6»°ğ0 )£)KlI¦ëÛ†òñ±„åx½eşc¾oãh¦wĞÔ\yO‰üjöô)¦•.ıÜ§ øv+=v$¨ÕÕ•.}Ì‘ÁnoOšc İìíñ
+éÉmë«.‹y)=*<‡}’=¯¢ğ	œÖqjâs×:ùë"’,KùZsÄLQ¥QÚ(yè‹ø£Yü¶,VŞ¢â…àOù®8GMûøò™ÙBÆé­ªã=‚W[RA•„à@@–úfŸÜÃm$0Å¼¨ãDtpq)^Äì¶€	‰¨º>Ê^êv¶²(Ÿ¨“…“@†¼(À ¦À¥ZüD†b„ÄŸ£KI›$>k]dDdê˜·ç|šµñ`}Î
+k“½OÏ†«ú0AÖÑ[A)»¥P•†µgÈNà2EV*Ä‹5âÕk/íêÔ1[Ø€‹iQ¥‰g3÷ç˜µÚÓñ;ºéUô´ìÉ¶—±9âqbfœ/¼å¼ë2b¿ÅÜÑUÌdŞQå½7'¯»¸ùÓá}Â½°<OoÁv®‘Qy?¼­­GÑ,`õ]™¨šğë‚š#»Iœô ú‡ÙÙ>Ä!%»1^Ğª	³1ıDuF©ƒ ¢]Ô‚C‘dõå‚÷+]6B
+‹—Ğ$1Şkmäe±#a•Ş;ƒH1Àdµ‡5'zş!ºsfÃ¼ÜÈÓ>$ûŠä²{pu¤È|v Ä#à±Ö®îI÷øy÷ø¨×şÎ6ˆv–CëYmd˜<Ôqpç†ï˜í±Ğ¼°²_rd‰/ùç¸§›_µKwÓ‡+¹oú‡ÆÎ“Ævıi÷E÷€ï:Îë½W`‡@Ÿ/ú¢l¼úk.Ëncï“Àq\ø /]ºY™vHÉ{5£B$œ6Ôšî˜ö£æ÷Mñ•šÜ·1Ëæa;÷oŞ¿êŸ6ú'¿ö^¾:“S¸˜ûîävşê…Üù:î¯½ŒûõŞ×_Ã‡«éî¿~÷ßv÷ßqıö\¾íüµ›·ÿ{·ÿ†[·ÿ;·ÿ–·¿ê¾í
+’äÈäáö˜Rª+
+p %t™×¯ı·§9£"¶îÒ(W¤\Æ„<ƒıÎàfá)vç¿PK   áhZ7¡•î°  Ä  
+   ZipTiny.pmkSÛHò3şq6RÅÙ<n#‹LB„]ÛIİR”°ÆX…,yõ Âßîid›»Ê©B<êîé÷t÷h¾³aÍ]ğ Ã_¦³PLE”yYGáG0/M‚{£D0¼YÛ€Í’VøGá‚lŠ$„Qœ˜Æ~Št‹‰Ó|6‹”qƒ“ÃDx¾HRğ"²ÄBz±â„Åâ)±Mí­Z-Oìn9í/Ó,	F™\ßÌ3‘Êåé…ë~ˆ§³D¤©ëö½‡c1½LHl‰ù7Zmæî¼[¡­GHœ'ĞøÚëN/>Ã¼nm9¯;zÜ{ÿå#Â$Û ô€ÎJÑPÀgÿÌC›Çh‚ôÔÒü¦Ş¸F«|/óà©V|6æ6g] °ˆÙuäM…›‡äV²I² ­’w&s¦m’FáŠm¸‰N£px)”ÛV³")4'\àUÂÙUƒ‚İVYbÌ—(£ÌRøÿƒe“r+”É~e±L>ã`$“—4!Xy<2(Í¼éÌ–˜Î¡1
+ã4O0UÀj H)¯¡´ÅU!ğ ®%­Æ"Ho<
+ÉJ_Œƒ…&)˜7ÆLVî˜`V"Æ–¦·Aü¯_Û˜0kì~vÊZ…CÁ{-‰õV–4¡¾_/•·sÒÔG^Åèz¢–l\h¬×‘iJá5ÀØÃl’Äùí„}~YİúéE~ş„eÄÇ³‹÷u¶%ŒG^·$r…åzŠ^t˜ÀÂød%ûòİ÷ª‚ûz}ˆpÓ.>š†]¤fc]:øD˜®öòàC÷¬Ûg_ƒzLwë-¨×f‚ìañ7TÔyÌDóÄë2aJ+éÇ²IÃõ"W¶Ìˆ2‹dHØ…´h1¶
+k·”Ÿˆ,O"x:ùÜ=ïÁÁa‘„MŒ5>.>{Ÿ‡ŒÑ™/1çÃSµC)ùÜ©=S9D²{‘dP=]ä…“îğíùàøb@5qê!IŠ¦‘ÙP¨5øÓÑ§¾€GvøR‘Q—ÀÒOÕÓSt#ß†ŸP§£utm‡7¥ÃŠüói=ÇÿæDÈÉÇş/öwj¦cözcûğ»cwÊ¡S³1ı}hµlø‰/SzÙ¥5‰…ÃCh•Š4XmÜCü6‰Q¿ã¸uoº``5|»ª‹…TÌâ7pÇø0qkOR³BÆVÁXÙ„`š£Ñ3Õ¬¸ŸF³<£–)WbşÅ“!AŠ|&^¿™-ã¢D°ŒËQœÓ‘±”h+yBpˆ(wÕ$¼OİÁ'Yãˆ|–§fñ¢êcY½£ÛïwÿSn!™ää#Ş°ÀÄTÚ:¶f)V¬Ğ6$íòÁ!Zv5y@w´knPfrÊ†¡ñ8‡Üê®a2CËÄ#ú=åS¸yøôá¸;ì>YWm/D!Ïçs™d#*Ì^`ì–ò§"›Ä¾œ_4lŠ2çA"Ù2°¤qª]ŠÂQÕ"ÆzLCqZ˜ÃŞ#¾®\u]ÚÜ¶®Ê{%­±ept]c²ÂÙÔÖÇ4-úÔµ¬#›K–5•5\'Zí&ìì5Á±zBÕ²C$ ›^š)]7ñ|¹^¡6ÏÄ½U5’ jXÉä—,bK~oB›¬X+bµdÃ¿løZà.cÚ„qÓ6{Ãçªlƒáq¯ßÇv¢äUêÂ+Ÿ&­WşUD“…LGn#ÏMÀáä6›”]Õ€p@¹óİQc¶ı¸S¤2À9—zX:Iòè®L½ö°° €Ãµâ,üj‚8M<F~Èô¯OæO‚:ÜÅùŸıŞ`pŞ~º8–DÁjuÍè÷şúrÚïIòµ*ô'gİ¦bUU±§’…%|¡›NqJ÷pœ¼¨ó•úş+ŸøŞ‰ùCœøæ½eƒ'i¸?ğfU	iH‡ ït­Íw˜³*Qoª
+Â¨¥s¾Å>õº˜.pl©éà¬€çe4S]œœzCoe?Ø¦Fš¡öd•=`áâùxoàkB¬¤ØÌkØïõúhÙ9ÖZW_F±{ŠĞ×bj¥MÈyĞÙÛİİŞ•—Q5´hç-4…$8œÅ3›š7	¤x¥À}*ÜJ5ä`\8¤’ª×5¬ªl'B0GuC†U¼”9òÄã1Nb”t
+û$ùÍg§ŒgÊ,‡ =+äVŞö¯½Ñ(ÇiDF&ÁxçÜèœRƒ#å1ÙŞåZaYÄ–¡štîæÜ¡6Ê
+!Öµ™Ø8…ú/'ÿsØhĞëª1£&ojÅU¯(–‰0;{¥¯3¶¼%0–go²MnMFˆ¨~Ñp]„n·ËIÄÕù°YúKç×³]°ÕÅS“ÈÚÊ9B©\©xŠvy®`âÅ‚§¨uï’şá"Gê”=ÍRK|mw÷lµSæ’Ğ‡«şõşşş+>÷÷œüçÑÙq¶wnvXªû
+ÌôËb³`u±ŠO y2RK™RÊ‹‹°â"eBÕ­‹uÅ†(³ÄS%Iaã³!?¬§¨bµ2›Úv2¾í´ã	²İÂØ åÌZŸ> ¹°½åÀ¼)ÊüTuÔ’§ø%O™®Zé«œµÊ[à4_ğ—Bñ'9Y´Õ~ëéDùôF$†Wxú˜—e%¦å8{;;òâ¥Ä–T®ê›ÉÃf²Iÿ´µXg#ˆi­‹–cÇ€¨bmU¡$üm¹EVÊ7oªÊ/lÅ-V~g5kzµµ]ŒüÅD»×³iÏÙÕùÅ¬ş*-W¾é.›ªÉÑ˜Z¥¸Ë
+·-³X @# ŠSÇ¼ˆ5ô­¯•şëëtËõµşæÀÃqQé­ËËzkc†£ğUg«ş]·İËz»Šk#.ÎwMbvw«Ñíüzé|‡·o%£Ëo¬¯#—-~}}£.ïü­NíPK   MŸhZúzr"  Q`             ¤_4  zipperlapp.plPK   áhZ7¡•î°  Ä  
+           ¤üV  ZipTiny.pmPK      s   Ô_    

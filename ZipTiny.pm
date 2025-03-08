@@ -110,7 +110,7 @@ sub compress_entry {
 	($compressmethod, $versionrequired) = (8, 20);
 	$flags = ($compressflag > 7) ? 1 : ($compressflag > 2) ? 0 : 2;
     }
-    printf STDERR "compressing $ent->{FNAME}: %d -> %d\n", length($content), length($cdata) if $DEBUG;
+    printf STDERR "compressing %s: %d -> %d\n", $ent->{FNAME}, length($content), length($cdata) if $DEBUG;
     # undo compression if it is not shrunk
     if (length($content) <= length($cdata)) {
 	$cdata = $content;
@@ -129,13 +129,13 @@ sub compress_entry {
 #   COMPRESS: zlib compression levels (1-9), 0 for no compression, 'bzip' for bzip2 compression.
 #   HEADER: data prepended to archive
 #   OFFSET: size of data to be prepented to archive (in addition to HEADER)
-#   TRAILER: comment field of zip file, up to 65535 bytes.
+#   TRAILERCOMMENT: comment field of zip file, up to 65535 bytes.
 
 sub make_zip {
     my ($entries, @options) = @_;
     my %options = { COMPRESS => 9,
 		    HEADER => "",
-		    TRAILER => "",
+		    TRAILERCOMMENT => "",
 		    OFFSET => 0};
     %options = ( %options, @options );
 
@@ -146,12 +146,12 @@ sub make_zip {
     my $fcount = 0;
 
     my @entries = @$entries;
-    
+
     $out .= $options{HEADER};
 
     for my $e (@entries) {
 	$pos = length($out) + $offset;
-	
+
 	if (ref $e eq 'ARRAY') {
 	    my @e = @$e;
 	    $e = make_zipdata(@e);
@@ -201,7 +201,7 @@ sub make_zip {
 			   0100644 << 16, # ext file attr: file, -rw-r--r--
 			   $pos
 			 ) . $name;
-	
+
 	$out .= $header;
 	$out .= $cdata;
 	$gheader_accumulate .= $gheader;
@@ -209,7 +209,7 @@ sub make_zip {
     }
 
     $pos = length($out) + $offset;
-    my $trailer = $options{TRAILER};
+    my $trailer = $options{TRAILERCOMMENT};
     my $ecd = pack("VvvvvVVv",
 		   0x06054b50,
 		   0,
@@ -228,7 +228,7 @@ sub make_zip {
 if ($0 eq __FILE__) {
     print make_zip([["1.dat", \"data 1"],
 		    ["2.dat", \"data 2"], [$0]],
-		   COMPRESS => ($ARGV[0] // 9), HEADER => "#!!", TRAILER => "!!#");
+		   COMPRESS => ($ARGV[0] // 9), HEADER => "#!!", TRAILERCOMMENT => "!!#");
 }
 
 1;
