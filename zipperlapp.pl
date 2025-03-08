@@ -42,7 +42,7 @@ use FindBin;
 use if (! scalar %ZipPerlApp::), lib => $FindBin::Bin;
 use ZipTiny;
 
-our $VERSION = "1.99.3";
+our $VERSION = "2.0.0";
 
 my $debug = 0;
 my $compression = 0;
