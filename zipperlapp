@@ -32,8 +32,8 @@ package ZipPerlApp::__ARCHIVED__;
 
 our %source;
 our %CONFIG = (
-            'main' => 'zipperlapp.pl',
-            'dequote' => 0
+            'dequote' => 0,
+            'main' => 'zipperlapp.pl'
           );
 
 
@@ -135,6 +135,22 @@ Inside Perl scripts, all files contained in the archive is put in the
 top of the searched library set.  The program can simply use C<use> or
 C<require> statements to load the contained modules, without modifying
 the C<@INC> variable.
+
+=head1 ARGUMENTS
+
+=over 8
+
+=item B<directory>
+
+If there are only one argument and it is a name of directory, All
+C<*.pl>/C<*.pm> files under that directory (recursively) are included.
+The directory name itself is truncated.
+
+=item B<files>
+
+Otherwise, all files specified in the argument are included.
+
+=back
 
 =head1 OPTIONS
 
@@ -281,19 +297,16 @@ C<--base64> is more reliable.
 
 =back
 
-=head2 ARGUMENTS
+=head2 OTHER OPTIONS
 
 =over 8
 
-=item B<directory>
+=item B<--inhibit-lib>
 
-If there are only one argument and it is a name of directory, All
-C<*.pl>/C<*.pm> files under that directory (recursively) are included.
-The directory name itself is truncated.
-
-=item B<files>
-
-Otherwise, all files specified in the argument are included.
+An experimental option.  It will nullify effect of C<'use lib ...'>,
+so that local files not included in the archive will not be read.
+It will break if any system library uses C<'lib'> pragma, thus
+use of the snippet in the APIS section is recommended.
 
 =back
 
@@ -411,7 +424,7 @@ and the Apache License will not apply for YOURS.)
 package ZipPerlApp::__ARCHIVED__;
 __DATA__
 PK
-     ÅhZ¶¡°ˇE^  E^     zipperlapp.pl#!/usr/bin/perl
+     |ÜhZ+Kyv`  v`     zipperlapp.pl#!/usr/bin/perl
 # zipperlapp - Make an executable perl script bundle using zip archive
 #
 # https://github.com/yoiwa-personal/zipperlapp/
@@ -467,6 +480,7 @@ my $base64 = 0;
 my $trimlibname = 1;
 my $searchincludedir = 1;
 my @includedir = ();
+my $inhibit_lib = 0;
 
 GetOptions(
 	   'compress|C:9' => \$compression,
@@ -482,6 +496,8 @@ GetOptions(
 	   'includedir|I:s' => \@includedir,
 	   'search-includedir!' => \$searchincludedir,
 	   'trim-includedir!' => \$trimlibname,
+
+	   'inhibit-lib' => \$inhibit_lib,
 
 	   'debug:+' => \$debug,
 
@@ -676,6 +692,8 @@ for my $f (@files) {
 my $pod = "";
 my $podsw = 0;
 
+# if ($inhibit_lib) { push @files, (['lib.pm', \'1;']);
+
 @files = ZipTiny::prepare_zip(@files);
 
 # consult main script for pod and she-bang
@@ -750,11 +768,14 @@ sub create_sfx {
     # prepare launching script
 
     our %config = (main => $main, dequote => $quote);
+    $config{inhibit_lib} = 1 if $inhibit_lib;
+
     our @features = ("MAIN",
 		     ($quote ? ("QUOTE") : ()),
 		     ($compression ? ("COMPRESSION") : ()),
 		     ($bzipcompression ? ("BZIPCOMPRESSION") : ()),
 		     ($textarchive ? ("TEXTARCHIVE") : ("ZIPARCHIVE")),
+		     ($inhibit_lib ? ("INHIBITLIB") : ()),
 		    );
 
     our $script = &script(\@features,
@@ -815,9 +836,6 @@ sub quote_required {
     my $count = ($zipdat =~ m/\n=/s);
     return $count;
 }
-
-#my $embpod_maybe = ($zipdat =~ /^(=[a-zA-Z])/m);
-
 
 sub script () {
     my ($features, %replace) = @_;
@@ -971,6 +989,9 @@ unshift @INC, \&provide;
 
 #BEGIN MAIN
 package main {
+#BEGIN INHIBITLIB
+    $INC{'lib.pm'} = \&provide if $CONFIG{inhibit_lib};
+#END INHIBITLIB
     my $main = $CONFIG{main};
     @@PKGNAME@@::fatal "missing main module in archive" unless exists $@@PKGNAME@@::source{$main};
     do $main;
@@ -1015,6 +1036,22 @@ Inside Perl scripts, all files contained in the archive is put in the
 top of the searched library set.  The program can simply use C<use> or
 C<require> statements to load the contained modules, without modifying
 the C<@INC> variable.
+
+=head1 ARGUMENTS
+
+=over 8
+
+=item B<directory>
+
+If there are only one argument and it is a name of directory, All
+C<*.pl>/C<*.pm> files under that directory (recursively) are included.
+The directory name itself is truncated.
+
+=item B<files>
+
+Otherwise, all files specified in the argument are included.
+
+=back
 
 =head1 OPTIONS
 
@@ -1161,19 +1198,16 @@ C<--base64> is more reliable.
 
 =back
 
-=head2 ARGUMENTS
+=head2 OTHER OPTIONS
 
 =over 8
 
-=item B<directory>
+=item B<--inhibit-lib>
 
-If there are only one argument and it is a name of directory, All
-C<*.pl>/C<*.pm> files under that directory (recursively) are included.
-The directory name itself is truncated.
-
-=item B<files>
-
-Otherwise, all files specified in the argument are included.
+An experimental option.  It will nullify effect of C<'use lib ...'>,
+so that local files not included in the archive will not be read.
+It will break if any system library uses C<'lib'> pragma, thus
+use of the snippet in the APIS section is recommended.
 
 =back
 
@@ -1520,6 +1554,6 @@ if ($0 eq __FILE__) {
 
 1;
 PK
-     ÅhZ¶¡°ˇE^  E^             §Å·0  zipperlapp.plPK
+     |ÜhZ+Kyv`  v`             §Å2  zipperlapp.plPK
      ’zhZv?%™  ™  
-           §ÅQè  ZipTiny.pmPK      s   #ß    
+           §Åæí  ZipTiny.pmPK      s   ê™    
