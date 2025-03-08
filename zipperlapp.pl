@@ -26,14 +26,17 @@
 
 use 5.024;
 use strict;
-use Fcntl;
+use Fcntl; # for sysopen constants
 use File::Basename "basename";
-use File::Temp "tempfile";
 use File::Find ();
 use Data::Dumper ();
 use Getopt::Long qw(:config posix_default bundling permute);
-use Pod::Usage;
-use Cwd;
+
+#use Pod::Usage;
+sub pod2usage {
+    require Pod::Usage;
+    goto &Pod::Usage::pod2usage;
+}
 
 use FindBin;
 use if (! scalar %ZipPerlApp::), lib => $FindBin::Bin;
@@ -103,8 +106,6 @@ if (@ARGV == 0) {
 }
 
 $ZipTiny::DEBUG = $debug;
-
-my $cwd = getcwd;
 
 my $possible_out = undef;
 my $main = undef;
@@ -251,8 +252,6 @@ if ($maintype != 3 || $mainopt ne $main) {
     say "main file set to: $main";
 }
 
-my $zipdir = $cwd;
-
 die "no main files guessed" unless (defined $main);
 
 if (! exists $enames{$main}) {
@@ -308,8 +307,6 @@ if ((($protect_pod == 2) || $quote_pod) && quote_required($zipdata)) {
 }
 
 print "writing to $out\n";
-
-chdir $zipdir or die "chdir: $!";
 
 sysopen(O, $out, O_WRONLY | O_CREAT | O_TRUNC, $mode) or die "write: $!";
 
