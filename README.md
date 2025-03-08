@@ -15,9 +15,9 @@ Run `zipperlapp --help` or `perldoc zipperlapp` for usage.
 
 ## Content of the source package / Git repository
 
-The script `zipperlapp` is a standalone binary Perl script packed by
-this tool itself.  Its source code is `zipperlapp.pl`.
-See `Makefile` for how to regenerate the packed file.
+The script `zipperlapp` is a standalone portable binary Perl script
+packed by this tool itself.  Its source code is `zipperlapp.pl`.  See
+`Makefile` for how to regenerate the packed file.
 
 ## AUTHOR/COPYRIGHT
 

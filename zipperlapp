@@ -33,8 +33,8 @@ package ZipPerlApp::__ARCHIVED__;
 our %source;
 my $zlib_loaded = 0;
 our %CONFIG = (
-            'main' => 'zipperlapp.pl',
-            'dequote' => 0
+            'dequote' => 0,
+            'main' => 'zipperlapp.pl'
           );
 
 
