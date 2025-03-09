@@ -800,7 +800,8 @@ or
     BEGIN {
         if (! scalar %ZipPerlApp::) {
             require FindBin;
-            require lib $FindBin::Bin;
+            require lib;
+            lib->import($FindBin::Bin);
         }
     }
 
