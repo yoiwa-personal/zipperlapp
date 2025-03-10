@@ -44,7 +44,8 @@ use ZipTiny;
 
 our $VERSION = "2.0.0";
 
-my $debug = 0;
+our $debug = 0;
+
 my $compression = 0;
 my $bzipcompression = 0;
 my $out = undef;
@@ -58,12 +59,13 @@ my $trimlibname = 1;
 my $searchincludedir = 1;
 my @includedir = ();
 my $inhibit_lib = 0;
+our $sizelimit = 1048576 * 64;
 
 GetOptions(
 	   'compress|C:9' => \$compression,
 	   'bzip' => \$bzipcompression,
-	   'output|o:s' => \$out,
-	   'main|m:s' => \$mainopt,
+	   'output|o=s' => \$out,
+	   'main|m=s' => \$mainopt,
 	   'copy-pod|p!' => \$copy_pod,
 	   'quote-pod!' => \$quote_pod,
 	   'protect-pod!' => \$protect_pod,
@@ -75,6 +77,8 @@ GetOptions(
 	   'trim-includedir!' => \$trimlibname,
 
 	   'inhibit-use-lib' => \$inhibit_lib,
+
+	   "sizelimit=i" => \$sizelimit,
 
 	   'debug:+' => \$debug,
 
@@ -106,6 +110,7 @@ if (@ARGV == 0) {
 }
 
 $ZipTiny::DEBUG = $debug;
+$ZipTiny::SIZELIMIT = $sizelimit;
 
 my $possible_out = undef;
 my $main = undef;
@@ -347,7 +352,7 @@ sub create_sfx {
 
     # prepare launching script
 
-    our %config = (main => $main, dequote => $quote);
+    our %config = (main => $main, dequote => $quote, sizelimit => $sizelimit);
     $config{inhibit_lib} = 1 if $inhibit_lib;
 
     our @features = ("MAIN",
@@ -481,6 +486,9 @@ sub prepare {
                 $csize, $size, $fnamelen, $extlen) =
                 unpack("vvvvvVVVvv", read_data(26));
 	    fatal "unsupported: deferred length" if ($flags & 0x8 != 0);
+            fatal "unsuppprted: 64bit record" if $size == 0xffffffff;
+            fatal "too big data (u:$size)" if $size >= $CONFIG{sizelimit};
+            fatal "too big data (c:$csize)" if $size >= $CONFIG{sizelimit};
 	    my $fname = read_data($fnamelen);
 	    my $ext = read_data($extlen);
 	    my $dat = read_data($csize);
@@ -489,7 +497,8 @@ sub prepare {
 #BEGIN COMPRESSION
 	    } elsif ($comp == 8) {
                 require Compress::Raw::Zlib;
-                my $i = new Compress::Raw::Zlib::Inflate(-WindowBits => - &Compress::Raw::Zlib::MAX_WBITS, -CRC32 => 1) or die;
+                my $i = new Compress::Raw::Zlib::Inflate(-WindowBits => - &Compress::Raw::Zlib::MAX_WBITS,
+                                                         -Bufsize => $size, -LimitOutput => 1, -CRC32 => 1) or die;
 		my $buf = '';
                 my $r = $i->inflate($dat, $buf, 1);
                 die "Inflate failed: error $r" if $r != &Compress::Raw::Zlib::Z_STREAM_END;
@@ -500,8 +509,8 @@ sub prepare {
 #BEGIN BZIPCOMPRESSION
 	    } elsif ($comp == 12) {
                 require Compress::Raw::Bzip2;
-                my $i = new Compress::Raw::Bunzip2(0, 0, 0, 0, 0);
-		my $buf = '';
+                my $i = new Compress::Raw::Bunzip2(0, 0, 0, 0, 1);
+		my $buf = ''; vec($buf, $size - 1, 8) = 0;
                 my $r = $i->bzinflate($dat, $buf);
                 die "Bunzip failed: error $r" if $r != &Compress::Raw::Bzip2::BZ_STREAM_END;
 		fatal "Bunzip failed: length mismatch" if length($buf) != $size;

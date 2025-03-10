@@ -13,6 +13,8 @@ package ZipTiny;
 our $VERSION = '1.0';
 our $DEBUG = 0;
 
+our $SIZELIMIT = 1048576 * 64;
+
 # read a single file and prepare for archiving
 sub make_zipdata {
 
@@ -38,8 +40,11 @@ sub make_zipdata {
 	local $/;
 	$! = undef;
 	$modtime = (stat($content))[9];
-	$content = <$content>;
+	my $dat;
+	my $n = read($content, $dat, $SIZELIMIT);
 	die "cannot read $fname: $!" if $!;
+	die "too large input file: $fname (>$SIZELIMIT)" if read($content, my $extra, 1) != 0;
+	$content = $dat;
     } elsif (ref($content) eq 'SCALAR') {
         $content = $$content . "";
     } else {
@@ -99,6 +104,8 @@ sub compress_entry {
     my $versionrequired = 10;
     my $flags = 0;
 
+    die "$ent->{FNAME}: too large data" if (length($content) > $SIZELIMIT);
+
     if (lc $compressflag eq 'bzip') {
 	require IO::Compress::Bzip2;
 	IO::Compress::Bzip2::bzip2(\$content, \$cdata)
@@ -116,6 +123,8 @@ sub compress_entry {
 	$cdata = $content;
 	($compressmethod, $versionrequired, $flags) = (0, 10, 0);
     }
+
+    die "$ent->{FNAME}: too large data after compression" if (length($cdata) > $SIZELIMIT);
 
     $ent->{CDATA} = $cdata;
     $ent->{COMPRESSMETHOD} = $compressmethod;
