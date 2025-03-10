@@ -2,17 +2,18 @@
 # - implemented only with Perl core modules.
 # - supporting SFX headers and trailers (or zip comments).
 
+package ZipTiny;
+
+our $VERSION = '1.1';
+
 use 5.024;
 use strict;
 use bytes;
 use IO::Compress::RawDeflate;
 use Compress::Zlib;
 
-package ZipTiny;
-
-our $VERSION = '1.0';
+use Carp;
 our $DEBUG = 0;
-
 our $SIZELIMIT = 1048576 * 64;
 
 # read a single file and prepare for archiving
@@ -32,7 +33,7 @@ sub make_zipdata {
     if (ref($content) eq '') {
 	# filename
 	my $fname = $content;
-	open ($closure, "<", $content) or die "cannot open $fname: $!";
+	open ($closure, "<", $content) or croak "error: $fname: cannot open: $!";
 	$content = $closure;
 	 # fallthrough
     }
@@ -42,17 +43,17 @@ sub make_zipdata {
 	$modtime = (stat($content))[9];
 	my $dat;
 	my $n = read($content, $dat, $SIZELIMIT);
-	die "cannot read $fname: $!" if $!;
-	die "too large input file: $fname (>$SIZELIMIT)" if read($content, my $extra, 1) != 0;
+	croak "error: $fname: cannot read: $!" if $!;
+	croak "error: $fname: too large input file (limit set to $SIZELIMIT)" if read($content, my $extra, 1) != 0;
 	$content = $dat;
     } elsif (ref($content) eq 'SCALAR') {
         $content = $$content . "";
     } else {
-	die "bad argument to make_zipdata";
+	croak "bad argument to make_zipdata";
     }
     $modtime = time() if !defined $modtime;
     if (defined $closure) {
-	close $closure or die "cannot close $fname: $!";
+	close $closure or croak "cannot close $fname: $!";
     }
     return {FNAME => $entname,
 	    CONTENT => $content,
@@ -104,16 +105,16 @@ sub compress_entry {
     my $versionrequired = 10;
     my $flags = 0;
 
-    die "$ent->{FNAME}: too large data" if (length($content) > $SIZELIMIT);
+    croak "error: $ent->{FNAME}: too large data" if (length($content) > $SIZELIMIT);
 
     if (lc $compressflag eq 'bzip') {
 	require IO::Compress::Bzip2;
 	IO::Compress::Bzip2::bzip2(\$content, \$cdata)
-	    or die "bzip2 compression failed";
+	    or confess "bzip2 compression failed";
 	($compressmethod, $versionrequired, $flags) = (12, 46, 0);
     } elsif ($compressflag > 0) {
 	IO::Compress::RawDeflate::rawdeflate(\$content, \$cdata, -Level => $compressflag)
-	    or die "rawdeflate failed";
+	    or confess "rawdeflate failed";
 	($compressmethod, $versionrequired) = (8, 20);
 	$flags = ($compressflag > 7) ? 1 : ($compressflag > 2) ? 0 : 2;
     }
@@ -124,7 +125,7 @@ sub compress_entry {
 	($compressmethod, $versionrequired, $flags) = (0, 10, 0);
     }
 
-    die "$ent->{FNAME}: too large data after compression" if (length($cdata) > $SIZELIMIT);
+    croak "error: $ent->{FNAME}: too large data after compression" if (length($cdata) > $SIZELIMIT);
 
     $ent->{CDATA} = $cdata;
     $ent->{COMPRESSMETHOD} = $compressmethod;
@@ -142,11 +143,12 @@ sub compress_entry {
 
 sub make_zip {
     my ($entries, @options) = @_;
-    my %options = { COMPRESS => 9,
+    my %options = ( COMPRESS => 9,
 		    HEADER => "",
 		    TRAILERCOMMENT => "",
-		    OFFSET => 0};
+		    OFFSET => 0);
     %options = ( %options, @options );
+    croak "error: make_zip: bad keyword arguments" unless scalar(keys %options) == 4;
 
     my $offset = $options{OFFSET};
     my $pos = $offset;
