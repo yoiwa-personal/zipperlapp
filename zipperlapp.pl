@@ -363,8 +363,12 @@ sub create_sfx {
 		     ($inhibit_lib ? ("INHIBITLIB") : ()),
 		    );
 
+    my $config_str =
+      Data::Dumper->new([\%config], ['*CONFIG'])
+      ->Useqq(1)->Sortkeys(1)->Dump();
+
     our $script = &script(\@features,
-			  CONFIG => Data::Dumper->Dump([\%config], ['*CONFIG']),
+			  CONFIG => $config_str,
 			  PKGNAME => 'ZipPerlApp::__ARCHIVED__',
 			  POD => $pod);
 
