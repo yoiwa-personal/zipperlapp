@@ -561,12 +561,13 @@ sub provide {
 
 prepare();
 unshift @INC, \&provide;
+#BEGIN INHIBITLIB
+
+$source{'lib.pm'} = "package lib; sub import () { } 1;";
+#END INHIBITLIB
 
 #BEGIN MAIN
 package main {
-#BEGIN INHIBITLIB
-    $INC{'lib.pm'} = \&provide if $CONFIG{inhibit_lib};
-#END INHIBITLIB
     my $main = $CONFIG{main};
     @@PKGNAME@@::fatal "missing main module in archive" unless exists $@@PKGNAME@@::source{$main};
     do $main;
