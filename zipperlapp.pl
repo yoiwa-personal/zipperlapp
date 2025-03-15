@@ -491,8 +491,8 @@ sub prepare {
                 unpack("vvvvvVVVvv", read_data(26));
 	    fatal "unsupported: deferred length" if ($flags & 0x8 != 0);
             fatal "unsuppprted: 64bit record" if $size == 0xffffffff;
-            fatal "too big data (u:$size)" if $size >= $CONFIG{sizelimit};
-            fatal "too big data (c:$csize)" if $size >= $CONFIG{sizelimit};
+            fatal "too big data (u:$size)" if $size > $CONFIG{sizelimit};
+            fatal "too big data (c:$csize)" if $csize > $CONFIG{sizelimit};
 	    my $fname = read_data($fnamelen);
 	    my $ext = read_data($extlen);
 	    my $dat = read_data($csize);
