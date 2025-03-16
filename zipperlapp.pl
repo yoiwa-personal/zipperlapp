@@ -131,12 +131,28 @@ my %enames = {};
 
 sub canonicalize_filename {
     my ($fname, $ismain) = @_;
-    die "$fname: name is absolute\n" if $fname =~ m@^/@s;
-    $fname =~ s@^(\./)+@@s;
-    while ($fname =~ s@/./@/@s) {}
-    while ($fname =~ s@(/[^/]+/../)@/@s) {}
-    die "$fname: name contains ..\n" if $fname =~ m@(^|/)../@s;
 
+    # canonicalize input path
+    $fname =~ s@^/+@/@s;
+    my @fname = split('/', $fname);
+    for (my $pos = 0; exists $fname[$pos]; $pos++) {
+	next if $pos == -1;
+	if ($fname[$pos] eq '.') {
+	    splice @fname, $pos, 1;
+	    redo;
+	} elsif ($pos != 0 &&
+		 $fname[$pos] eq '..' &&
+		 $fname[$pos-1] ne '' && # not parent-of-root
+		 $fname[$pos-1] ne '..' # parent of parent
+		) {
+	    splice @fname, $pos-1, 2;
+	    $pos--;
+	    redo;
+	}
+    }
+    $fname = join("/", @fname);
+
+    # check with include directory
     my $ename = $fname;
     if ($trimlibname) {
 	for my $l (@includedir) {
@@ -148,6 +164,9 @@ sub canonicalize_filename {
 	    }
 	}
     }
+
+    die "$ename: name is absolute\n" if $ename =~ m@^/@s;
+    die "$ename: name contains ..\n" if $ename =~ m@(^|/)../@s;
 
     return wantarray ? ($fname, $ename) : $ename;
 }
