@@ -133,7 +133,7 @@ sub canonicalize_filename {
     my ($fname, $ismain) = @_;
 
     # canonicalize input path
-    $fname =~ s@^/+@/@s;
+    $fname =~ s@^/+@/@sg;
     my @fname = split('/', $fname);
     for (my $pos = 0; exists $fname[$pos]; $pos++) {
 	next if $pos == -1;
