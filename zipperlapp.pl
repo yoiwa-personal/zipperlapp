@@ -38,6 +38,8 @@ sub pod2usage {
     goto &Pod::Usage::pod2usage;
 }
 
+use re '/saa'; # strictly byte-oriented, no middle \n match
+
 use FindBin;
 use if (! scalar %ZipPerlApp::), lib => $FindBin::Bin;
 use ZipTiny;
@@ -133,7 +135,7 @@ sub canonicalize_filename {
     my ($fname, $ismain) = @_;
 
     # canonicalize input path
-    $fname =~ s@^/+@/@sg;
+    $fname =~ s(\A/+)(/)sg;
     my @fname = split('/', $fname);
     for (my $pos = 0; exists $fname[$pos]; $pos++) {
 	next if $pos == -1;
@@ -165,8 +167,8 @@ sub canonicalize_filename {
 	}
     }
 
-    die "$ename: name is absolute\n" if $ename =~ m@^/@s;
-    die "$ename: name contains ..\n" if $ename =~ m@(^|/)../@s;
+    die "$ename: name is absolute\n" if $ename =~ m@\A/@s;
+    die "$ename: name contains ..\n" if $ename =~ m@(\A|/)../@s;
 
     return wantarray ? ($fname, $ename) : $ename;
 }
@@ -207,15 +209,15 @@ sub add_dir {
     File::Find::find
 	({wanted => sub {
 	      my $f = $File::Find::name;
-	      return if $f =~ m((^|\/)\.[^\/]*$)s;
-	      add_file($f) if $f =~ /\.p[lm]$/s;
+	      return if $f =~ m((\A|\/)\.[^\/]*\z)s;
+	      add_file($f) if $f =~ /\.p[lm]\z/s;
 	  },
 	  no_chdir => 1
 	 }, $fname);
 }
 
 for (@includedir) {
-    $_ =~ s@/+$@@s;
+    $_ =~ s(/+\z)()s;
 }
 
 if (defined $mainopt) {
@@ -227,7 +229,7 @@ if (defined $mainopt) {
 if (-d $ARGV[0]) {
     die "if the first file is a directory, it must be the only argument" unless (scalar @ARGV == 1);
     $dir = $ARGV[0];
-    $dir =~ s@/+$@@s;
+    $dir =~ s(/+\z)()s;
     $possible_out = $dir;
     unshift @includedir, ($dir);
     $searchincludedir = 0;
@@ -256,7 +258,7 @@ for (@ARGV) {
     if (-f $_) {
 	add_file($_);
     } elsif (-d $_) {
-	s@\/+$@@s;
+	s(\/+\z)()s;
 	add_dir($_);
     } else {
 	die "file not found: $_" unless -e $_;
@@ -269,7 +271,7 @@ if (! defined $out) {
 	die "cannot guess name";
     }
     $out = basename $possible_out; # for a while
-    $out =~ s/(\.pl)?$/\.plz/;
+    $out =~ s/(\.pl)?\z/\.plz/;
     say "output is set to: $out";
 }
 if ($maintype != 3 || $mainopt ne $main) {
@@ -317,7 +319,7 @@ if ($copy_pod) {
 
 $shebang = "#!/usr/bin/perl\n" if $shebang eq '';
 
-my $mode = ($shebang =~ /\A#!/ ? 0777 : 0666);
+my $mode = ($shebang =~ /\A#!/s ? 0777 : 0666);
 
 # initial try with minimal quotations
 
@@ -412,7 +414,7 @@ sub create_sfx {
     if ($quote eq 'quote') {
 	$zipdata =~ s/^=/==/mg;
 	# quoting breaks archive structure.
-	$zipdata =~ s/PK([\0-\37][\0-\37])/PK\0$1/g;
+	$zipdata =~ s/PK([\000-\037][\000-\037])/PK\000$1/g;
     } elsif ($quote eq 'base64') {
 	require MIME::Base64;
 	$zipdata = MIME::Base64::encode_base64($zipdata);
@@ -443,17 +445,17 @@ sub create_textarchive() {
 
 sub quote_required {
     my ($zipdat) = @_;
-    my $count = ($zipdat =~ m/\n=/s);
-    return $count;
+    return (index($zipdat, "\n=") != -1);
 }
 
 sub script () {
     my ($features, %replace) = @_;
     my $script = &script_body();
 
-    1 while $script =~ s[^#BEGIN\ ([A-Z]+)\n(.*?)^#END\ \1\n]
+    1 while $script =~ s[^#BEGIN\ ([A-Z0-9_]+)\n(.*?)^#END\ \1\n]
 			[grep ($_ eq $1, @$features) ? $2 : ""]mseg;
-    $script =~ s/@@([A-Z]+)@@/%replace{$1}/eg;
+    $script =~ s[@@([A-Z0-9_]+)@@]
+		[%replace{$1} // die "internal error: no replacement"]eg;
     return $script;
 }
 
