@@ -44,7 +44,7 @@ use FindBin;
 use if (! scalar %ZipPerlApp::), lib => $FindBin::Bin;
 use ZipTiny;
 
-our $VERSION = "2.0.0";
+our $VERSION = "2.0.1";
 
 our $debug = 0;
 
@@ -80,8 +80,8 @@ GetOptions(
 
 	   'inhibit-use-lib' => \$inhibit_lib,
 
-	   "sizelimit=i" => \$sizelimit,
-
+	   'sizelimit=i' => \$sizelimit,
+	   'random-seed=i' => sub { srand $_[1] },
 	   'debug:+' => \$debug,
 
 	   'help' => sub { pod2usage(1) }) or do { pod2usage(2); exit 1 };
@@ -819,6 +819,19 @@ C<--base64> is more reliable.
 =head2 OTHER OPTIONS
 
 =over 8
+
+=item B<--random-seed>
+
+Specify a seed integer for pseudorandom number generators.  Some
+features (e.g. C<--text-archive> or C<--protect-pod>) uses random
+numbers to generate a unique byte sequence in the archive.  This makes
+the output archives for the same input set may differ time-to-time.
+Specifying a random seed will make output somewhat deterministic for
+the same input.  It is not a strong guarantee; the output may still
+differ by small change of inputs or even small environmental changes
+such as use of different machines or system library updates.  Main
+expected use of this option is to put the archive outputs to version
+control systems such as git or subversion.
 
 =item B<--inhibit-use-lib>
 

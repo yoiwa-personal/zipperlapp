@@ -1,13 +1,14 @@
 # Makefile for zipperlapp
 
 COMPRESSION = -C9
+ZIPPERLAPPOPT = -p $(COMPRESSION) --random-seed=314159265
 
 all: zipperlapp
 
 zipperlapp: zipperlapp.pl ZipTiny.pm
-	./zipperlapp.pl -p $(COMPRESSION) -o $@ $^
-	./zipperlapp -p $(COMPRESSION) -o $@ $^
-	./zipperlapp -p $(COMPRESSION) -o $@ $^
+	./zipperlapp.pl $(ZIPPERLAPPOPT) -o $@ $^
+	./zipperlapp $(ZIPPERLAPPOPT) -o $@ $^
+	./zipperlapp $(ZIPPERLAPPOPT) -o $@ $^
 
 # running three-time bootstrap as a test
 #  1st to generate the packed binary
