@@ -281,11 +281,12 @@ if (! defined $out) {
     $out =~ s/(\.pl)?\z/\.plz/;
     say "output is set to: $out";
 }
+
+die "no main files guessed" unless (defined $main);
+
 if ($maintype != 3 || $mainopt ne $main) {
     say "main file set to: $main";
 }
-
-die "no main files guessed" unless (defined $main);
 
 if (! exists $enames{$main}) {
     die "no main file $main will be contained in archive";
