@@ -132,7 +132,7 @@ my @files = ();
 my %enames = {};
 
 sub canonicalize_filename {
-    my ($fname, $ismain) = @_;
+    my ($fname, $fixedprefix) = @_;
 
     # canonicalize input path
     $fname =~ s(\A/+)(/)sg;
@@ -154,9 +154,13 @@ sub canonicalize_filename {
     }
     $fname = join("/", @fname);
 
-    # check with include directory
+    # trim names with include directory
     my $ename = $fname;
     if ($trimlibname) {
+	my @includedir = @includedir;
+	if (defined $fixedprefix) {
+	    unshift @includedir, $fixedprefix;
+	}
 	for my $l (@includedir) {
 	    my $libdir = "$l/";
 	    my $length = length($libdir);
@@ -174,13 +178,13 @@ sub canonicalize_filename {
 }
 
 sub add_file {
-    my ($fname) = @_;
+    my ($fname, $fixedprefix) = @_;
     # behavior of main mode:
     #  1: add if *.pl, duplication is error
     #  2: add if first
     #  3: noop
 
-    my ($fname, $ename) = canonicalize_filename($fname);
+    my ($fname, $ename) = canonicalize_filename($fname, $fixedprefix);
     die "cannot find $fname: $!" unless -e $fname;
     die "$fname is not a plain file" unless -f $fname;
     if (exists $enames{$ename}) {
@@ -205,12 +209,13 @@ sub add_file {
 }
 
 sub add_dir {
-    my ($fname) = @_;
+    my ($fname, $prefix) = @_;
     File::Find::find
 	({wanted => sub {
 	      my $f = $File::Find::name;
-	      return if $f =~ m((\A|\/)\.[^\/]*\z)s;
-	      add_file($f) if $f =~ /\.p[lm]\z/s;
+	      if ($f =~ /\.p[lm]\z/s && !($f =~ m((\A|\/)\.[^\/])s)) {
+		  add_file($f, $prefix);
+	      }
 	  },
 	  no_chdir => 1
 	 }, $fname);
@@ -244,11 +249,13 @@ if (defined $mainopt) {
 }
 
 for (@ARGV) {
+    my $foundprefix = undef;
     unless (-e $_) {
 	if ($searchincludedir) {
 	    for my $l (@includedir) {
 		my $ff = "$l/$_";
 		if (-e $ff) {
+		    $foundprefix = $l;
 		    $_ = $ff;
 		    last;
 		}
@@ -256,10 +263,10 @@ for (@ARGV) {
 	}
     }
     if (-f $_) {
-	add_file($_);
+	add_file($_, $foundprefix);
     } elsif (-d $_) {
 	s(\/+\z)()s;
-	add_dir($_);
+	add_dir($_, $foundprefix);
     } else {
 	die "file not found: $_" unless -e $_;
 	die "unknown type of argument: $_\n";
