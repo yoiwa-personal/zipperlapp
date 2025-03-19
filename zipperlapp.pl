@@ -625,13 +625,23 @@ zipperlapp - Make an executable perl script bundle using zip archive
   Options:
     --main              -m module    specify main entry module
     --output=file       -o file      output file
+
+    --includedir        -I           locations to find input files
+    --[no-]search-includedir         search files from -I library directories
+    --[no-]trim-includedir           trim -I library paths from names
+
     --compress[={0-9}]  -C[{0-9}]    apply compression
+    --bzip                           apply Bzip2 compression
     --base64            -B           encode with BASE64
     --text-archive      -T           use text-based archive format
+
     --copy-pod          -p           copy pod from main module
-    --includedir        -I           locations to find input files
-    --protect-pod
-    --quote-pod
+    --[no-]protect-pod               hide unwanted pods from processors
+    --quote-pod                      quote pods in archive (zip incompatible)
+
+    --inhibit-use-lib                disable 'use lib' pragma
+    --random-seed=...                specify random seed
+
     --help                           show help
 
 =head1 DESCRIPTION
@@ -823,15 +833,17 @@ C<--base64> is more reliable.
 =item B<--random-seed>
 
 Specify a seed integer for pseudorandom number generators.  Some
-features (e.g. C<--text-archive> or C<--protect-pod>) uses random
+features (e.g. C<--text-archive> or C<--protect-pod>) use random
 numbers to generate a unique byte sequence in the archive.  This makes
-the output archives for the same input set may differ time-to-time.
+output archives for the same input set to differ time-to-time.
 Specifying a random seed will make output somewhat deterministic for
 the same input.  It is not a strong guarantee; the output may still
 differ by small change of inputs or even small environmental changes
 such as use of different machines or system library updates.  Main
 expected use of this option is to put the archive outputs to version
-control systems such as git or subversion.
+control systems such as git or subversion, making difference smaller.
+
+In Perl, seeds to specify will be an 32-bit integer.
 
 =item B<--inhibit-use-lib>
 
