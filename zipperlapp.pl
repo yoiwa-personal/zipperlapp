@@ -299,8 +299,6 @@ for my $f (@files) {
 my $pod = "";
 my $podsw = 0;
 
-# if ($inhibit_lib) { push @files, (['lib.pm', \'1;']);
-
 @files = ZipTiny::prepare_zip(@files);
 
 # consult main script for pod and she-bang
@@ -596,7 +594,7 @@ prepare();
 unshift @INC, \&provide;
 #BEGIN INHIBITLIB
 
-$source{'lib.pm'} = "package lib; sub import () { } 1;";
+$source{'lib.pm'} = "package lib; sub import () { } 1;" if $CONFIG{inhibit_lib};
 #END INHIBITLIB
 
 #BEGIN MAIN
