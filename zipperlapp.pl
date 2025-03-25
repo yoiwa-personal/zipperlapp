@@ -42,9 +42,10 @@ use re '/saa'; # strictly byte-oriented, no middle \n match
 
 use FindBin;
 use if (! scalar %ZipPerlApp::), lib => $FindBin::Bin;
-use ZipTiny;
 
-our $VERSION = "2.0.1";
+use ZipPerlApp::SFXGenerate;
+
+our $VERSION = "2.1.0";
 
 our $debug = 0;
 
@@ -111,506 +112,33 @@ if (@ARGV == 0) {
     }
 }
 
-$ZipTiny::DEBUG = $debug;
-$ZipTiny::SIZELIMIT = $sizelimit;
+my $progout_fh = \*STDOUT;
 
-my $possible_out = undef;
-my $main = undef;
-my $dir = undef;
-my $maintype = 0;
-
-# determine main file and output name
-# argument types:
-#   type 1: a single directory dir, no main specified
-#     -> include all files in dir, search for the main file (single .pl), output dir.plz
-#   type 2: a set of files
-#     -> specified files included, first argument must be .pl file, output first.plz
-#   type 3: main file specified
-#     -> specified files included, main file must be included, output main.plz
-
-my @files = ();
-my %enames = {};
-
-sub canonicalize_filename {
-    my ($fname, $fixedprefix) = @_;
-
-    # canonicalize input path
-    $fname =~ s(\A/+)(/)sg;
-    my @fname = split('/', $fname);
-    for (my $pos = 0; exists $fname[$pos]; $pos++) {
-	next if $pos == -1;
-	if ($fname[$pos] eq '.') {
-	    splice @fname, $pos, 1;
-	    redo;
-	} elsif ($pos != 0 &&
-		 $fname[$pos] eq '..' &&
-		 $fname[$pos-1] ne '' && # not parent-of-root
-		 $fname[$pos-1] ne '..' # parent of parent
-		) {
-	    splice @fname, $pos-1, 2;
-	    $pos--;
-	    redo;
-	}
-    }
-    $fname = join("/", @fname);
-
-    # trim names with include directory
-    my $ename = $fname;
-    if ($trimlibname) {
-	my @includedir = @includedir;
-	if (defined $fixedprefix) {
-	    unshift @includedir, $fixedprefix;
-	}
-	for my $l (@includedir) {
-	    my $libdir = "$l/";
-	    my $length = length($libdir);
-	    if (substr($ename, 0, length($libdir)) eq $libdir) {
-		$ename = substr($ename, $length);
-		last;
-	    }
-	}
-    }
-
-    die "$ename: name is absolute\n" if $ename =~ m@\A/@s;
-    die "$ename: name contains ..\n" if $ename =~ m@(\A|/)../@s;
-
-    return wantarray ? ($fname, $ename) : $ename;
+if ($out eq '-') {
+    print STDERR "output is stdout\n";
+    $out = \*STDOUT;
+    $progout_fh = \*STDERR;
 }
 
-sub add_file {
-    my ($fname, $fixedprefix) = @_;
-    # behavior of main mode:
-    #  1: add if *.pl, duplication is error
-    #  2: add if first
-    #  3: noop
-
-    my ($fname, $ename) = canonicalize_filename($fname, $fixedprefix);
-    die "cannot find $fname: $!" unless -e $fname;
-    die "$fname is not a plain file" unless -f $fname;
-    if (exists $enames{$ename}) {
-	if ($fname ne $enames{$ename}) {
-	    die "duplicated files: $fname and $enames{$ename} will be same name in the archive";
-	} else {
-	    # skip;
-	}
-    } else {
-	if ($maintype == 1) {
-	    if ($ename =~ /\.pl$/s) {
-		die "found two .pl files: $main and $ename\n" if defined $main;
-		$main = $ename;
-	    }
-	} elsif ($maintype == 2) {
-	    $main = $ename unless defined $main;
-	    $possible_out = $ename unless defined $possible_out;
-	}
-	$enames{$ename} = $fname;
-	push @files, [$ename, $fname];
-    }
-}
-
-sub add_dir {
-    my ($fname, $prefix) = @_;
-    File::Find::find
-	({wanted => sub {
-	      my $f = $File::Find::name;
-	      if ($f =~ /\.p[lm]\z/s && !($f =~ m((\A|\/)\.[^\/])s)) {
-		  add_file($f, $prefix);
-	      }
-	  },
-	  no_chdir => 1
-	 }, $fname);
-}
-
-for (@includedir) {
-    $_ =~ s(/+\z)()s;
-}
-
-if (defined $mainopt) {
-    $main = $mainopt;
-    $possible_out = $main;
-    $maintype = 3;
-}
-
-if (-d $ARGV[0]) {
-    die "if the first file is a directory, it must be the only argument" unless (scalar @ARGV == 1);
-    $dir = $ARGV[0];
-    $dir =~ s(/+\z)()s;
-    $possible_out = $dir;
-    unshift @includedir, ($dir);
-    $searchincludedir = 0;
-    $trimlibname = 1;
-    $maintype = 1 unless $maintype == 3;
-} else {
-    $maintype = 2 unless $maintype == 3;
-}
-
-if (defined $mainopt) {
-    $main = canonicalize_filename($main);
-}
-
-for (@ARGV) {
-    my $foundprefix = undef;
-    unless (-e $_) {
-	if ($searchincludedir) {
-	    for my $l (@includedir) {
-		my $ff = "$l/$_";
-		if (-e $ff) {
-		    $foundprefix = $l;
-		    $_ = $ff;
-		    last;
-		}
-	    }
-	}
-    }
-    if (-f $_) {
-	add_file($_, $foundprefix);
-    } elsif (-d $_) {
-	s(\/+\z)()s;
-	add_dir($_, $foundprefix);
-    } else {
-	die "file not found: $_" unless -e $_;
-	die "unknown type of argument: $_\n";
-    }
-}
-
-if (! defined $out) {
-    if (!$possible_out or $possible_out eq '.') {
-	die "cannot guess name";
-    }
-    $out = basename $possible_out; # for a while
-    $out =~ s/(\.pl)?\z/\.plz/;
-    say "output is set to: $out";
-}
-
-die "no main files guessed" unless (defined $main);
-
-if ($maintype != 3 || $mainopt ne $main) {
-    say "main file set to: $main";
-}
-
-if (! exists $enames{$main}) {
-    die "no main file $main will be contained in archive";
-}
-
-for my $f (@files) {
-    printf "%s <- %s\n", $f->[0], $f->[1];
-}
-
-my $pod = "";
-my $podsw = 0;
-
-@files = ZipTiny::prepare_zip(@files);
-
-# consult main script for pod and she-bang
-
-# this depends on internal data structure of ZipTiny
-my ($mainent) = grep { $_->{FNAME} eq $main } @files;
-
-die unless defined $mainent;
-open MAIN, "<", \($mainent->{CONTENT}) or die "read main: $!";
-my $shebang = '';
-while (($_ = <MAIN>) =~ /^#/) {
-    $shebang .= $_;
-}
-
-if ($copy_pod) {
-    while (defined $_) {
-	$podsw = 1 if(/^=[a-z]/);
-	$podsw = 0 if(/^=cut\b/);
-	$pod .= $_ if $podsw;
-	$_ = <MAIN>;
-    }
-    # more treatment will be later
-}
-
-$shebang = "#!/usr/bin/perl\n" if $shebang eq '';
-
-my $mode = ($shebang =~ /\A#!/s ? 0777 : 0666);
-
-# initial try with minimal quotations
-
-my ($headerdata, $zipdata) = create_sfx(\@files, $shebang, $pod, $textarchive, $compression, $base64, 0, ($protect_pod == 1));
-
-if ((($protect_pod == 2) || $quote_pod) && quote_required($zipdata)) {
-    # retry with quotations
-    print STDERR "detected unquoted pods -- retry with quoting/protection enabled\n" if $debug;
-    $protect_pod = !$quote_pod;
-    ($headerdata, $zipdata) = create_sfx(\@files, $shebang, $pod, $textarchive, $compression, $base64, $quote_pod, !$quote_pod);
-}
-
-print "writing to $out\n";
-
-sysopen(O, $out, O_WRONLY | O_CREAT | O_TRUNC, $mode) or die "write: $!";
-
-print O $headerdata or die "$!";
-print O $zipdata or die "$!";
-close O or die "$!";
+ZipPerlApp::SFXGenerate->zipperlapp
+  (
+   \@ARGV,
+   out => $out,
+   mainopt => $mainopt,
+   compression => $compression,
+   base64 => $base64,
+   textarchive => $textarchive,
+   copy_pod => $copy_pod,
+   protect_pod => $protect_pod,
+   quote_pod => $quote_pod,
+   includedir => \@includedir,
+   searchincludedir => $searchincludedir,
+   trimlibname => $trimlibname,
+   sizelimit => $sizelimit,
+   progout_fh => $progout_fh
+  );
 exit(0);
 
-sub create_sfx {
-    my ($files, $shebang, $pod, $textarchive, $compression, $base64, $quote, $protect_pod) = @_;
-    my (@files) = @$files;
-
-    my $sfx_embed = (!$textarchive && !$quote && !$base64);
-
-    # prepare launching script
-
-    print STDERR "create_sfx: b64 $base64, quote $quote, protect $protect_pod\n" if $debug;
-    if ($protect_pod) {
-	if ($pod ne "" or $protect_pod == 1) {
-	    my $podsig;
-	    while () {
-		$podsig = sprintf("POD_ESCAPE_ZipPerlApp_%08d", int(rand(100000000)));
-		last unless (grep { index($_->{CONTENT}, $podsig) != -1 or
-				      index($_->{FNAME}, $podsig) != -1 } @files);
-		print "protect_pod: signature $podsig is not well... retrying\n" if $debug >= 2;
-	    }
-	    print "protect_pod: signature $podsig\n" if $debug >= 2;
-	    $pod .= "\n=begin $podsig\n\n=cut\n";
-	}
-    } elsif ($pod ne "") {
-	$pod .= "=cut\n";
-    }
-    if ($base64) {
-	$quote = 'base64';
-    } elsif ($quote) {
-	$quote = 'quote';
-    }
-
-    # prepare launching script
-
-    our %config = (main => $main, dequote => $quote, sizelimit => $sizelimit);
-    $config{inhibit_lib} = 1 if $inhibit_lib;
-
-    our @features = ("MAIN",
-		     ($quote ? ("QUOTE") : ()),
-		     ($compression ? ("COMPRESSION") : ()),
-		     ($bzipcompression ? ("BZIPCOMPRESSION") : ()),
-		     ($textarchive ? ("TEXTARCHIVE") : ("ZIPARCHIVE")),
-		     ($inhibit_lib ? ("INHIBITLIB") : ()),
-		    );
-
-    my $config_str =
-      Data::Dumper->new([\%config], ['*CONFIG'])
-      ->Useqq(1)->Sortkeys(1)->Dump();
-
-    our $script = &script(\@features,
-			  CONFIG => $config_str,
-			  PKGNAME => 'ZipPerlApp::__ARCHIVED__',
-			  POD => $pod);
-
-    my $header = $shebang . "\n" . $script;
-
-    my $zipdata;
-
-    if ($textarchive) {
-	$zipdata = create_textarchive(@files);
-    } else {
-	my $offset = 0;
-	if ($sfx_embed) {
-	    $offset = length($header);
-	}
-	print STDERR "offset -> $offset\n" if $debug;
-	$zipdata = ZipTiny::make_zip(\@files,
-			  COMPRESS => $compression,
-			  OFFSET => $offset,
-			  HEADER => "",
-			  TRAILERCOMMENT => "");
-    }
-    if ($quote eq 'quote') {
-	$zipdata =~ s/^=/==/mg;
-	# quoting breaks archive structure.
-	$zipdata =~ s/PK([\000-\037][\000-\037])/PK\000$1/g;
-    } elsif ($quote eq 'base64') {
-	require MIME::Base64;
-	$zipdata = MIME::Base64::encode_base64($zipdata);
-    }
-
-    return $header, $zipdata;
-}
-
-sub create_textarchive() {
-    my $zipdat = "";
-    local $/;
-    for my $e (@_) {
-	# this depends on internal data structure of ZipTiny
-	my $sep;
-	my $fname = $e->{FNAME};
-	my $dat = $e->{CONTENT};
-	for(;;) {
-	    $sep = sprintf("----TEXTARCHIVE-%08d----------------", int(rand(100000000)));
-	    last if index($dat, $sep) == -1 and index($fname, $sep) == -1;
-	    print STDERR "create_textarchive: separator $sep is not well... retrying\n" if $debug >= 2;
-	}
-	print STDERR "create_textarchive: separator $sep for $fname\n" if $debug >= 2;
-	$zipdat .= "TXD\n$sep\n$fname\n$sep\n$dat\n$sep\n";
-    }
-    $zipdat .= "TXE\n";
-    return $zipdat;
-}
-
-sub quote_required {
-    my ($zipdat) = @_;
-    return (index($zipdat, "\n=") != -1);
-}
-
-sub script () {
-    my ($features, %replace) = @_;
-    my $script = &script_body();
-
-    1 while $script =~ s[^#BEGIN\ ([A-Z0-9_]+)\n(.*?)^#END\ \1\n]
-			[grep ($_ eq $1, @$features) ? $2 : ""]mseg;
-    $script =~ s[@@([A-Z0-9_]+)@@]
-		[%replace{$1} // die "internal error: no replacement"]eg;
-    return $script;
-}
-
-sub script_body () { <<'EOS'; }
-# This script is packaged by zipperlapp
-use 5.024;
-no utf8;
-use strict;
-package @@PKGNAME@@;
-
-our %source;
-our @@CONFIG@@
-
-sub fatal {
-    @_ = ("error processing zipped script: @_"); goto &CORE::die; die @_
-}
-
-sub read_data {
-    my $len = $_[0];
-    return '' if $len == 0;
-    my $dat;
-    read(DATA, $dat, $len);
-    fatal "data truncated" if length($dat) != $len;
-    return $dat;
-}
-
-sub prepare {
-    use bytes;
-#BEGIN QUOTE
-    if (my $quote = $CONFIG{dequote}) {
-        local $/;
-        my $zipdat = <DATA>;
-        close DATA;
-        if ($quote eq 'base64') {
-            require MIME::Base64;
-            $zipdat = MIME::Base64::decode_base64($zipdat);
-        } elsif ($quote eq 'quote') {
-            $zipdat =~ s/PK\0([\0-\37][\0-\37])/PK$1/g;
-            $zipdat =~ s/^==/=/mg;
-        }
-        open DATA, "<", \$zipdat or fatal "scalar IO failed.";
-    }
-#END QUOTE
-
-    for(;;) {
-	my $hdr = read_data(4);
-#BEGIN ZIPARCHIVE
-        # This function assumes a "correct" zip archive,
-        # using per-file headers instead of the central archive.
-	if ($hdr eq "PK\3\4") {
-	    # per_file zip header
-	    my (undef, $flags, $comp, undef, undef, $crc, 
-                $csize, $size, $fnamelen, $extlen) =
-                unpack("vvvvvVVVvv", read_data(26));
-	    my $fname = read_data($fnamelen);
-	    my $ext = read_data($extlen);
-	    fatal "$fname: unsupported: deferred length" if ($flags & 0x8 != 0);
-            fatal "$fname: unsuppprted: 64bit record" if $size == 0xffffffff;
-            fatal "$fname: too big data (u:$size)" if $size > $CONFIG{sizelimit};
-            fatal "$fname: too big data (c:$csize)" if $csize > $CONFIG{sizelimit};
-	    my $dat = read_data($csize);
-	    if ($comp == 0) {
-		fatal "$fname: malformed data: bad length" if $csize != $size;
-#BEGIN COMPRESSION
-	    } elsif ($comp == 8) {
-                require Compress::Raw::Zlib;
-                my $i = new Compress::Raw::Zlib::Inflate(-WindowBits => - &Compress::Raw::Zlib::MAX_WBITS,
-                                                         -Bufsize => $size, -LimitOutput => 1, -CRC32 => 1) or die;
-		my $buf = '';
-                my $r = $i->inflate($dat, $buf, 1);
-                fatal "$fname: Inflate failed: error $r" if $r != &Compress::Raw::Zlib::Z_STREAM_END;
-		fatal "$fname: Inflate failed: length mismatch" if length($buf) != $size;
-		fatal "$fname: Inflate failed: crc mismatch" unless $i->crc32() == $crc;
-		$dat = $buf;
-#END COMPRESSION
-#BEGIN BZIPCOMPRESSION
-	    } elsif ($comp == 12) {
-                require Compress::Raw::Bzip2;
-                my $i = new Compress::Raw::Bunzip2(0, 0, 0, 0, 1);
-		my $buf = ''; vec($buf, $size - 1, 8) = 0;
-                my $r = $i->bzinflate($dat, $buf);
-                fatal "$fname: Bunzip failed: error $r" if $r != &Compress::Raw::Bzip2::BZ_STREAM_END;
-		fatal "$fname: Bunzip failed: length mismatch" if length($buf) != $size;
-		#fatal "$fname: Bunzip failed: crc mismatch" unless $i->crc32() == $crc;
-		$dat = $buf;
-#END BZIPCOMPRESSION
-	    } else {
-		fatal "$fname: unknown compression (type $comp)";
-	    }
-
-	    $source{$fname} = $dat;
-	    next;
-	} elsif ($hdr eq "PK\1\2") {
-	    last; # central directory found. exiting.
-	} elsif ($hdr eq "PK\5\6") {
-	    fatal "malformed or empty archive";
-	}
-#END ZIPARCHIVE
-#BEGIN TEXTARCHIVE
-	if ($hdr eq "TXD\n") {
-	    (my $bar = <DATA>) ne '' or fatal "malformed archive";
-	    my ($fname, $dat);
-	    {
-		local $/ = "\n" . $bar;
-		chomp ($fname = <DATA>);
-                chomp ($dat = <DATA>);
-	    }
-	    $source{$fname} = $dat;
-	    next;
-	} elsif ($hdr eq "TXE\n") {
-	    last;
-	}
-#END TEXTARCHIVE
-	fatal "malformed data";
-    }
-    close DATA;
-}
-
-sub provide {
-    my ($self, $fname) = @_;
-    if (exists($source{$fname})) {
-	my $str = $source{$fname};
-	open my $fh, "<", \$str or fatal "string IO failed.";
-	return \("#line 1 " . __FILE__  . "/$fname\n"), $fh;
-    }
-    return undef;
-}
-
-prepare();
-unshift @INC, \&provide;
-#BEGIN INHIBITLIB
-
-$source{'lib.pm'} = "package lib; sub import () { } 1;" if $CONFIG{inhibit_lib};
-#END INHIBITLIB
-
-#BEGIN MAIN
-package main {
-    my $main = $CONFIG{main};
-    @@PKGNAME@@::fatal "missing main module in archive" unless exists $@@PKGNAME@@::source{$main};
-    do $main;
-    die $@ if $@;
-}
-#END MAIN
-
-@@POD@@
-
-package @@PKGNAME@@;
-__DATA__
-EOS
 
 =head1 NAME
 
@@ -871,7 +399,12 @@ or
         }
     }
 
-can be used.
+can be used.  For a main entry script,
+
+    use FindBin;
+    use if (__FILE__ eq $0), lib => $FindBin::Bin;
+
+also works.
 
 =head1 LIMITATIONS
 

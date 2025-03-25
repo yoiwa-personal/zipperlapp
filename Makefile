@@ -5,7 +5,7 @@ ZIPPERLAPPOPT = -p $(COMPRESSION) --random-seed=314159265
 
 all: zipperlapp
 
-zipperlapp: zipperlapp.pl ZipTiny.pm
+zipperlapp: zipperlapp.pl ZipPerlApp/SFXGenerate.pm ZipPerlApp/ZipTiny.pm
 	./zipperlapp.pl $(ZIPPERLAPPOPT) -o $@ $^
 	./zipperlapp $(ZIPPERLAPPOPT) -o $@ $^
 	./zipperlapp $(ZIPPERLAPPOPT) -o $@ $^
