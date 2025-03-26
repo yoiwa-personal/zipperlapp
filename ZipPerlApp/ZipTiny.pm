@@ -27,6 +27,7 @@ zip comments.
 use 5.024;
 use strict;
 use bytes;
+use IO::File;
 our $DEBUG = 0;
 our $SIZELIMIT = 1048576 * 64;
 use Carp;
@@ -228,21 +229,26 @@ sub add_entry {
     my $fname = $entname;
     if (ref($content) eq '') {
 	# filename
-	open ($closure, "<", $content) or croak "error: $content: cannot open: $!";
-	$content = $closure;
+	$content = $closure = IO::File->new($content, "r")
+	  or croak "error: $content: cannot open: $!";
 	# fallthrough
     }
-    if (ref($content) eq "IO" || ref($content) eq "GLOB") {
+    if (ref($content) eq "GLOB") {
+	$content = *$content{IO};
+	croak "error: $content: non-file glob passed" unless defined $content;
+    }
+
+    if (ref($content) eq 'SCALAR') {
+        $content = $$content . "";
+    } elsif (ref($content) ne '' && $content->can('read')) {
 	local $/;
 	$! = undef;
-	$modtime = (stat($content))[9];
+	$modtime = $content->can('stat') ? (stat($content))[9] : undef;
 	my $dat;
 	my $n = read($content, $dat, $self->{sizelimit});
 	croak "error: $fname: cannot read: $!" if $!;
 	croak "error: $fname: too large input file (limit set to $self->{sizelimit})" if read($content, my $extra, 1) != 0;
 	$content = $dat;
-    } elsif (ref($content) eq 'SCALAR') {
-        $content = $$content . "";
     } else {
 	croak "bad argument to make_zipdata";
     }
@@ -528,7 +534,7 @@ if ($0 eq __FILE__) {
       ( [["1.dat", \"data 1"],
 	 ["2.dat", \"data 2"],
 	 [$0]],
-	COMPRESS => ($ARGV[0] // 9), HEADER => "#!!", TRAILERCOMMENT => "!!#");
+	compress => ($ARGV[0] // 9), header => "#!!", trailercomment => "!!#");
     print $z;
 }
 
