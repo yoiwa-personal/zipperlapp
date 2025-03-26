@@ -85,29 +85,32 @@ package ZipPerlApp::ZipTiny::CompressEntry {
     use Compress::Zlib ();
 
     use Carp;
-    sub new {
-	my $class = shift;
 
-	my $h = { fname => undef,
+    use fields qw(fname content mtime source parent compressflag cdata zipflags);
+
+    sub new {
+	my $self = shift;
+	$self = fields::new($self) unless ref $self;
+
+	my %h = ( fname => undef,
 		  content => undef,
 		  mtime => undef,
 		  source => undef,
 		  parent => undef,
-		  @_ };
+		  @_ );
 
-	die unless scalar keys %$h == 5;
+	die unless scalar keys %h == 5;
 
-	die unless defined $h->{fname} &&
-	  defined $h->{content} &&
-	  defined $h->{mtime};
+	die unless defined $h{fname} &&
+	  defined $h{content} &&
+	  defined $h{mtime};
 
-	$h->{compressflag} = undef;
-	$h->{cdata} = undef;
-	$h->{zipflags} = undef;
+	%$self = %h;
+	$self->{compressflag} = undef;
+	$self->{cdata} = undef;
+	$self->{zipflags} = undef;
 
-	bless $h, $class;
-	Hash::Util::lock_ref_keys($h);
-	return $h;
+	return $self;
     }
 
     sub fname { return $_[0]->{fname} }
@@ -179,17 +182,16 @@ by C<make_zip>.
 
 =cut
 
+use fields qw(entries entries_hash sizelimit debug);
+
 sub new {
-    my $class = shift;
+    my $self = shift;
 
-    my $self = {};
-    $self->{entries} = [];
-    $self->{entries_hash} = {};
-    $self->{sizelimit} = $SIZELIMIT;
-    $self->{debug} = $DEBUG;
-
-    bless $self, $class;
-    Hash::Util::lock_ref_keys($self);
+    $self = fields::new($self) unless ref $self;
+    %$self = (entries => [],
+	      entries_hash => {},
+	      sizelimit => $SIZELIMIT,
+	      debug => $DEBUG);
 
     $self->add_entries(@_) if @_;
 

@@ -47,8 +47,14 @@ The middle-level interfaces has the following methods:
 
 =cut
 
+use fields qw(possible_out main maintype includedir trimlibname
+              sizelimit debug interactive diagout_fh progout_fh zip);
+
 sub new {
-    my $class = shift;
+    my $self = shift;
+
+    $self = fields::new($self) unless ref $self;
+
     my %options = (sizelimit => 64 * 1048576,
 		   progout_fh => undef,
 		   diagout_fh => undef,
@@ -59,24 +65,17 @@ sub new {
       scalar keys %options == 4;
 
     my $zip = ZipPerlApp::ZipTiny->new();
-
-    my $self = { possible_out => undef,
-		 main => undef,
-		 maintype => 0,
-		 includedir => [],
-		 trimlibname => 1,
-		 sizelimit => $options{sizelimit},
-		 debug => $options{debug},
-		 interactive => 0,
-		 diagout_fh => $options{diagout_fh},
-		 progout_fh => $options{progout_fh},
-	       };
-
     $zip->__setopt($options{sizelimit}, $options{debug});
-    $self->{zip} = $zip;
 
-    bless $self, $class;
-    Hash::Util::lock_ref_keys($self);
+    %$self = (possible_out => undef,
+	      main => undef,
+	      maintype => 0,
+	      includedir => [],
+	      trimlibname => 1,
+	      interactive => 0,
+	      zip => $zip,
+	      %options);
+
     return $self;
 }
 
