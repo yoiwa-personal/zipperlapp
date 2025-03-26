@@ -6,6 +6,22 @@
 
 package ZipPerlApp::SFXGenerate v2.1.0;
 
+=pod
+
+=head1 NAME
+
+ZipPerlApp::SFXGenerate: a generator for pure-perl SFX archives.
+
+=head1 DESCRIPTION
+
+This module creates a perl script with simple zip archive,
+can be used as a self-contained script for several modules.
+
+There are two sets of interfaces: middle level (library level) and
+command level.
+
+=cut
+
 use 5.024;
 use strict;
 use Fcntl; # for sysopen constants
@@ -25,6 +41,12 @@ our $DEBUG = 0;
 
 ### Mid-level interfaces
 
+=head1 Middle-level interfaces
+
+The middle-level interfaces has the following methods:
+
+=cut
+
 sub new {
     my $class = shift;
     my %options = (sizelimit => 64 * 1048576,
@@ -33,10 +55,10 @@ sub new {
 		   debug => $DEBUG,
 		   @_);
 
-    die "ZipPerlAll::SFXGenerate->new: bad keyword arguments" unless
+    die "ZipPerlApp::SFXGenerate->new: bad keyword arguments" unless
       scalar keys %options == 4;
 
-    my $zip = ZipPerlAll::ZipTiny->new();
+    my $zip = ZipPerlApp::ZipTiny->new();
 
     my $self = { possible_out => undef,
 		 main => undef,
@@ -58,10 +80,32 @@ sub new {
     return $self;
 }
 
+=head2 SFXGenerate->new([kwd => value, ...])
+
+C<new> creates a new instance for SFX generator.
+
+It has the following keyword arguments:
+
+sizelimit: a file size limit for each zip entry, used for both
+generating and running time. (default: 64Mi bytes)
+
+=cut
+
 sub add_entry {
     my $self = shift;
     $self->{zip}->add_entry(@_);
 }
+
+=head2 add_entry(entry_name, real_name)
+
+Add a file to the sfx archive.
+
+If two file names are passed, these will be used as a
+name for zip entry, and name of the file to read.
+
+See C<ZipTiny::add_entry> for more argument patterns.
+
+=cut
 
 sub generate {
     my $self = shift;
@@ -76,10 +120,10 @@ sub generate {
 		    quote_pod => 0,
 		    protect_pod => 1,
 		    inhibit_lib => 0, @_);
-    die "ZipPerlAll::SFXGenerate::generate: bad keyword argument"
+    die "ZipPerlApp::SFXGenerate::generate: bad keyword argument"
       unless scalar keys %options == 9;
 
-    die "ZipPerlAll::SFXGenerate::generate: no mandatory keyword argument" unless
+    die "ZipPerlApp::SFXGenerate::generate: no mandatory keyword argument" unless
       defined $options{out} and defined $options{main};
 
     my $zip = $self->{zip};
@@ -155,7 +199,43 @@ sub generate {
     close $out_fh or die "$!" if $out_fh_close;
 }
 
+=head2 generate(kwd => value, ...)
+
+Generate a sfx archive and write to a file.
+
+The following keyword arguments are accepted:
+
+=over 4
+
+=item out
+
+(mandatory) A file-name or a filehandle for output.
+
+=item main
+
+(mandatory) An entry name for the "main script" in the archive.
+The stored "file" of that name will be loaded first.
+
+=item compression
+
+The compression level (0--9 or string 'bzip') for the archive.
+
+=item base64, textarchive, copy_pod, quote_pod, protect_pod, inhibit_lib
+
+These are boolean corresponding to the options of C<zipperlapp>.
+See man (or POD) of C<zipperlapp> for details.
+
+=back
+
+=cut
+
 # High-level (command line level) interface
+
+=head1 High-level interfaces
+
+The high-level interface has a single class method called C<zipperlapp>.
+
+=cut
 
 ## support routines
 
@@ -251,6 +331,55 @@ sub cmd_add_dir {
 	 }, $fname);
 }
 
+=head2 SFXGenerate->zipperlapp(\@files, [kwd => value, ...])
+
+C<zipperlapp> creates a SFX archive.
+
+All arguments are exactly corresponding to the command-line arguments
+of C<zipperlapp>.  See man or pod of C<zipperlapp> for details.
+
+The first argument is an array reference for filenames.
+
+The rest is a keyword-style arguments:
+
+=over 4
+
+=item *
+
+Options C<base64>, C<textarchive>, C<copy_pod>,
+C<quote_pod>, C<protect_pod>, C<inhibit_lib>, C<searchincludedir>,
+C<trimlibname> are booleans corresponding to the command options.
+
+=item *
+
+The option C<out> can contain a file name or a reference to Perl file-handle.
+To redirect output to standard output, pass C<\*STDOUT> (the backslash is important),
+and also specify C<progout_fh> below.
+
+=item *
+
+C<mainopt> is a string for C<-m> option.
+
+=item *
+
+C<includedir> is an array reference for C<-I> option.
+
+=item *
+
+C<compression> can contain integers 0--9, or a string 'bzip'.
+
+=item *
+
+C<progout_fh> contains a file-handle for progress and informative messages
+which C<zipperlapp> generates.
+
+It defaults to STDOUT, and can be C<undef> for suppressing messages.
+When C<\*STDOUT> is passed to C<out>, also set this property to C<\*STDERR> or C<undef>.
+
+=back
+
+=cut
+
 sub zipperlapp {
     my $self = shift;
 
@@ -280,8 +409,8 @@ sub zipperlapp {
 
     if ($self eq __PACKAGE__) { # called as class method
 	my $sizelimit = delete $poptions{sizelimit};
-	my $diagout_fh = delete $poptions{diagout_fh} || *STDERR;
-	my $progout_fh = delete $poptions{progout_fh} || *STDOUT;
+	my $diagout_fh = exists $poptions{diagout_fh} ? delete $poptions{diagout_fh} : *STDERR;
+	my $progout_fh = exists $poptions{progout_fh} ? delete $poptions{progout_fh} : *STDOUT;
 	$self = ZipPerlApp::SFXGenerate->new
 	  (sizelimit => $sizelimit,
 	   diagout_fh => $diagout_fh,
@@ -463,10 +592,10 @@ sub create_sfx {
 	    $offset = length($header);
 	}
 	print STDERR "offset -> $offset\n" if $debug;
-	$zipdata = $zip->make_zip( COMPRESS => $compression,
-				   OFFSET => $offset,
-				   HEADER => "",
-				   TRAILERCOMMENT => "");
+	$zipdata = $zip->make_zip( compress => $compression,
+				   offset => $offset,
+				   header => "",
+				   trailercomment => "");
     }
     if ($quote eq 'quote') {
 	$zipdata =~ s/^=/==/mg;
@@ -678,3 +807,36 @@ __DATA__
 EOS
 
 1;
+
+=head1 REFERENCE
+
+L<Homepage|https://www.github.com/yoiwa-personal/zipperlapp>
+
+L<Python's "zipapp" implementation|https://docs.python.org/en/3/library/zipapp.html>
+
+=head1 AUTHOR/COPYRIGHT
+
+Copyright 2019-2025 Yutaka OIWA <yutaka@oiwa.jp>.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+L<http://www.apache.org/licenses/LICENSE-2.0>
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+As a special exception to the Apache License, outputs of this
+software, which contain a code snippet copied from this software, may
+be used and distributed under terms of your choice, so long as the
+sole purpose of these works is not redistributing the code snippet,
+this software, or modified works of those.  The "AS-IS BASIS" clause
+above still applies in these cases.
+
+(In short, you can freely use this software to package YOUR software
+and the Apache License will not apply for YOURS.)
+
+=cut
