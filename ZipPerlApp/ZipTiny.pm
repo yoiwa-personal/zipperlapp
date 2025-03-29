@@ -32,7 +32,7 @@ our $DEBUG = 0;
 our $SIZELIMIT = 1048576 * 64;
 use Carp;
 
-use Hash::Util;
+use Scalar::Util;
 
 =head2 class ZipPerlApp::ZipTiny::CompressEntry
 
@@ -224,37 +224,63 @@ sub add_entry {
 
     $content = $entname unless defined $content;
 
-    my $closure;
+    my $file_to_close;
 
     my $fname = $entname;
+
     if (ref($content) eq '') {
-	# filename
-	$content = $closure = IO::File->new($content, "r")
-	  or croak "error: $content: cannot open: $!";
-	# fallthrough
+	# case 1) not a reference
+	if (Scalar::Util::openhandle($content)) {
+	    # case 1-1) A raw glob with IO slot filled ... *FILE
+	    $content = *$content{IO};
+	    croak "error: $content: non-file glob passed" unless defined $content; #should not happen
+	    # take out an IO reference, fall through to 4)
+	} else {
+	    # case 1-2) A raw string (or non-IO glob) ... "fname"
+	    $content = $file_to_close = IO::File->new($content, "r")
+	      or croak "error: $content: cannot open: $!";
+	    # turn into a IO::File reference, fallthrough to 4)
+	}
     }
     if (ref($content) eq "GLOB") {
+	# case 2) Glob reference: must be IO. ... \*FILE
 	$content = *$content{IO};
 	croak "error: $content: non-file glob passed" unless defined $content;
+	# take out an IO reference, fall through to 4)
     }
 
     if (ref($content) eq 'SCALAR') {
+	# case 3) String reference ... \"content"
         $content = $$content . "";
     } elsif (ref($content) ne '' && $content->can('read')) {
-	local $/;
+	# case 4) A reference to IO::File, or other file-like object
+	#    ... IO::File->new(...), IO::Scalar, IO::String etc.
+	#    ... case 1) will reach here, too.
+
+	# binmode and stat are optional
+	eval { binmode($content); };
+	$modtime = $content->can('stat') && eval { (stat($content))[9] };
+	# this accepts
+	#  - true mtime
+	#  - dummy ctime or 0 for OS-level non-files;
+	#  - undef if PerlIO non-files
+	#  - undef or die()-ed for other objects
+	#  - method unimplemented for other objects
+
 	$! = undef;
-	$modtime = $content->can('stat') ? (stat($content))[9] : undef;
 	my $dat;
 	my $n = read($content, $dat, $self->{sizelimit});
 	croak "error: $fname: cannot read: $!" if $!;
 	croak "error: $fname: too large input file (limit set to $self->{sizelimit})" if read($content, my $extra, 1) != 0;
 	$content = $dat;
     } else {
-	croak "bad argument to make_zipdata";
+	# case 0) object not implementing 'read' method
+	croak "bad argument to ZipTiny->add_entry";
     }
-    $modtime = time() if !defined $modtime;
-    if (defined $closure) {
-	close $closure or croak "cannot close $fname: $!";
+    $modtime = time() if ! $modtime;
+    if (defined $file_to_close) {
+	# close only in case 2)
+	close $file_to_close or croak "cannot close $fname: $!";
     }
 
     my $obj = ZipPerlApp::ZipTiny::CompressEntry->new
@@ -316,6 +342,7 @@ sub dosdate ($) {
 
     my $time = ($h << 11) | ($m << 5) |  ($s >> 1);
     my $date = (($y - 80) << 9) | (($my + 1) << 5) | ($d);
+#    return 0xffffffff if $date > 0xffff;
 
     return ((($date & 0xffff) << 16) | ($time & 0xffff));
 }
@@ -525,14 +552,15 @@ limitations under the License.
 =cut
 
 if ($0 eq __FILE__) {
-#     my $e = ZipPerlApp::ZipTiny->new
-#       ( ["1.dat", \"data 1"],
-# 	["2.dat", \"data 2"],
-# 	[$0]);
-#     print $e->make_zip(COMPRESS => ($ARGV[0] // 9), HEADER => "#!!", TRAILERCOMMENT => "!!#");
+    open F, "<", \"string data";
+    open R, "<", \"string data raw";
+    open P, "-|", "date";
     my $z = ZipPerlApp::ZipTiny::make_zip
       ( [["1.dat", \"data 1"],
 	 ["2.dat", \"data 2"],
+	 ["string.dat", \*F],
+	 ["stringraw.dat", \*R],
+	 ["pipe.dat", \*P],
 	 [$0]],
 	compress => ($ARGV[0] // 9), header => "#!!", trailercomment => "!!#");
     print $z;
