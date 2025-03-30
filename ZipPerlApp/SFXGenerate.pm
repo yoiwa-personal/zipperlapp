@@ -65,7 +65,7 @@ sub new {
       scalar keys %options == 4;
 
     my $zip = ZipPerlApp::ZipTiny->new();
-    $zip->__setopt($options{sizelimit}, $options{debug});
+    $zip->__setopt($options{sizelimit}, $options{debug}, $options{diagout_fh});
 
     %$self = (possible_out => undef,
 	      main => undef,
@@ -109,6 +109,7 @@ See C<ZipTiny::add_entry> for more argument patterns.
 sub generate {
     my $self = shift;
     my $progout_fh = $self->{progout_fh};
+    my $diagout_fh = $self->{debug} && $self->{diagout_fh};
 
     my %options = ( out => undef,
 		    main => undef,
@@ -117,7 +118,7 @@ sub generate {
 		    textarchive => 0,
 		    copy_pod => 0,
 		    quote_pod => 0,
-		    protect_pod => 1,
+		    protect_pod => 2,
 		    inhibit_lib => 0, @_);
     die "ZipPerlApp::SFXGenerate::generate: bad keyword argument"
       unless scalar keys %options == 9;
@@ -129,7 +130,7 @@ sub generate {
     my ($out, $main, $compression, $base64, $textarchive, $copy_pod, $quote_pod, $protect_pod, $inhibit_lib) =
       @options{qw(out main compression base64 textarchive copy_pod quote_pod protect_pod inhibit_lib)};
 
-    if (! exists $zip->{entries_hash}{$main}) {
+    if (! $zip->include_q($main)) {
 	die "no main file $main will be contained in archive";
     }
 
@@ -144,8 +145,7 @@ sub generate {
 
     # consult main script for pod and she-bang
 
-    # this depends on internal data structure of ZipTiny
-    my ($mainent) = $zip->{entries_hash}{$main};
+    my ($mainent) = $zip->find_entry($main);
 
     die unless defined $mainent;
     open MAIN, "<", \($mainent->content) or die "read main: $!";
@@ -177,9 +177,9 @@ sub generate {
 
     if ((($protect_pod == 2) || $quote_pod) && quote_required($zipdata)) {
 	# retry with quotations
-	print STDERR "detected unquoted pods -- retry with quoting/protection enabled\n" if $self->{debug};
+	print $diagout_fh "detected unquoted pods -- retry with quoting/protection enabled\n" if $self->{debug} && $diagout_fh;
 	$protect_pod = !$quote_pod;
-	($headerdata, $zipdata) = create_sfx($shebang, $main, $pod, $textarchive, $compression, $base64, $quote_pod, !$quote_pod, $inhibit_lib);
+	($headerdata, $zipdata) = $self->create_sfx($shebang, $main, $pod, $textarchive, $compression, $base64, $quote_pod, !$quote_pod, $inhibit_lib);
     }
 
     my ($out_fh, $out_fh_close);
@@ -408,10 +408,12 @@ sub zipperlapp {
 
     if ($self eq __PACKAGE__) { # called as class method
 	my $sizelimit = delete $poptions{sizelimit};
+	my $debug = delete $poptions{debug} // $DEBUG;
 	my $diagout_fh = exists $poptions{diagout_fh} ? delete $poptions{diagout_fh} : *STDERR;
 	my $progout_fh = exists $poptions{progout_fh} ? delete $poptions{progout_fh} : *STDOUT;
 	$self = ZipPerlApp::SFXGenerate->new
 	  (sizelimit => $sizelimit,
+	   debug => $debug,
 	   diagout_fh => $diagout_fh,
 	   progout_fh => $progout_fh
 	  );
@@ -528,9 +530,10 @@ sub create_sfx {
     my ($self, $shebang, $main, $pod, $textarchive, $compression, $base64, $quote, $protect_pod, $inhibit_lib) = @_;
 
     my $debug = $self->{debug};
+    my $diagout_fh = $self->{diagout_fh};
     my $zip = $self->{zip};
 
-    print STDERR "create_sfx: b64 $base64, quote $quote, protect $protect_pod\n" if $debug;
+    print $diagout_fh "create_sfx: b64 $base64, quote $quote, protect $protect_pod\n" if ($debug && $diagout_fh);
 
     my $sfx_embed = (!$textarchive && !$quote && !$base64);
 
@@ -542,9 +545,9 @@ sub create_sfx {
 		$podsig = sprintf("POD_ESCAPE_ZipPerlApp_%08d", int(rand(100000000)));
 		last unless (grep { index($_->content(), $podsig) != -1 or
 				      index($_->fname(), $podsig) != -1 } ($zip->entries()));
-		print "protect_pod: signature $podsig is not well... retrying\n" if $debug >= 2;
+		print $diagout_fh "protect_pod: signature $podsig is not well... retrying\n" if ($debug >= 2 && $diagout_fh);
 	    }
-	    print "protect_pod: signature $podsig\n" if $debug >= 2;
+	    print $diagout_fh "protect_pod: signature $podsig\n" if ($debug >= 2 && $diagout_fh);
 	    $pod .= "\n=begin $podsig\n\n=cut\n";
 	}
     } elsif ($pod ne "") {
@@ -590,7 +593,7 @@ sub create_sfx {
 	if ($sfx_embed) {
 	    $offset = length($header);
 	}
-	print STDERR "offset -> $offset\n" if $debug;
+	print $diagout_fh "offset -> $offset\n" if ($debug && $diagout_fh);
 	$zipdata = $zip->make_zip( compress => $compression,
 				   offset => $offset,
 				   header => "",
@@ -611,20 +614,20 @@ sub create_sfx {
 sub create_textarchive {
     my ($self) = shift;
     my $debug = $self->{debug};
+    my $diagout_fh = $self->{diagout_fh};
 
     my $zipdat = "";
     local $/;
     for my $e ($self->{zip}->entries) {
-	# this depends on internal data structure of ZipTiny
 	my $sep;
 	my $fname = $e->fname;
 	my $dat = $e->content;
 	for(;;) {
 	    $sep = sprintf("----TEXTARCHIVE-%08d----------------", int(rand(100000000)));
 	    last if index($dat, $sep) == -1 and index($fname, $sep) == -1;
-	    print STDERR "create_textarchive: separator $sep is not well... retrying\n" if $debug >= 2;
+	    print $diagout_fh "create_textarchive: separator $sep is not well... retrying\n" if ($debug >= 2 && $diagout_fh);
 	}
-	print STDERR "create_textarchive: separator $sep for $fname\n" if $debug >= 2;
+	print $diagout_fh "create_textarchive: separator $sep for $fname\n" if ($debug >= 2 && $diagout_fh);
 	$zipdat .= "TXD\n$sep\n$fname\n$sep\n$dat\n$sep\n";
     }
     $zipdat .= "TXE\n";

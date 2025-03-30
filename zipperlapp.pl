@@ -135,7 +135,8 @@ ZipPerlApp::SFXGenerate->zipperlapp
    searchincludedir => $searchincludedir,
    trimlibname => $trimlibname,
    sizelimit => $sizelimit,
-   progout_fh => $progout_fh
+   progout_fh => $progout_fh,
+   debug => $debug
   );
 exit(0);
 

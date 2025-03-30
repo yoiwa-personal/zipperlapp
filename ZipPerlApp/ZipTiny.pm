@@ -124,6 +124,8 @@ package ZipPerlApp::ZipTiny::CompressEntry {
     sub compress {
 	my ($self, $compressflag) = @_;
 
+	my $debug_fh = $self->{parent}->{debug} && $self->{parent}->{debug_fh};
+
 	return if defined $self->{compressflag} && $self->{compressflag} eq $compressflag;
 
 	my $fname = $self->fname;
@@ -146,8 +148,8 @@ package ZipPerlApp::ZipTiny::CompressEntry {
 	    my $flags = ($compressflag > 7) ? 1 : ($compressflag > 2) ? 0 : 2;
 	    @zipflags = (8, 20, $flags);
 	}
-	printf STDERR "compressing %s: %d -> %d\n", $self->{FNAME}, length($content), length($cdata) if $DEBUG;
-	# undo compression if it is not shrunk
+	printf $debug_fh "compressing %s: %d -> %d\n", $self->{fname}, length($content), length($cdata) if $debug_fh;
+	# und`129o compression if it is not shrunk
 	if (length($content) <= length($cdata)) {
 	    $cdata = $content;
 	    @zipflags = (0, 10, 0);
@@ -165,8 +167,8 @@ package ZipPerlApp::ZipTiny::CompressEntry {
 
 generates a compress data stream for the entry.
 
-Argument compress flag is either an integer 0--9 (for zlib compression levels) or
-the string 'bzip' for Bzip2 encryption.
+Argument compress flag is either an integer 0-9 for zlib compression levels, or
+the string 'bzip' for Bzip2 compression.
 
 Usually not needed to call it directly; ZipTiny::make_zip will call it automatically.
 
@@ -183,7 +185,7 @@ by C<make_zip>.
 
 =cut
 
-use fields qw(entries entries_hash sizelimit debug);
+use fields qw(entries entries_hash sizelimit debug debug_fh);
 
 sub new {
     my $self = shift;
@@ -192,7 +194,9 @@ sub new {
     %$self = (entries => [],
 	      entries_hash => {},
 	      sizelimit => $SIZELIMIT,
-	      debug => $DEBUG);
+	      debug => $DEBUG,
+	      debug_fh => \*STDERR,
+	     );
 
     $self->add_entries(@_) if @_;
 
@@ -210,9 +214,10 @@ these are processed as C<add_entries> below, as a shortcut.
 
 sub __setopt {
     my $self = shift;
-    my ($sizelimit, $debug) = @_;
+    my ($sizelimit, $debug, $debug_fh) = @_;
     $self->{sizelimit} = ($sizelimit // 64 * 1048576);
-    $self->{debug} = $debug;
+    $self->{debug} = $debug || 0;
+    $self->{debug_fh} = $debug_fh if defined $debug_fh;
 }
 
 sub add_entry {
@@ -259,14 +264,17 @@ sub add_entry {
 
 	# binmode and stat are optional
 	eval { binmode($content); };
-	$modtime = $content->can('stat') && eval { (stat($content))[9] };
-	# this accepts
-	#  - true mtime
-	#  - dummy ctime or 0 for OS-level non-files;
-	#  - undef if PerlIO non-files
-	#  - undef or die()-ed for other objects
-	#  - method unimplemented for other objects
 
+	if (!defined $modtime) {
+	    $modtime = $content->can('stat') && eval { (stat($content))[9] };
+	    # this accepts the following cases:
+	    #  - true modification time
+	    #  - creation time for OS-level non-files;
+	    #  - 0 for OS-level non-files;
+	    #  - undef if PerlIO non-files;
+	    #  - undef or die()-ed for other objects;
+	    #  - method unimplemented for other objects
+	}
 	$! = undef;
 	my $dat;
 	my $n = read($content, $dat, $self->{sizelimit});
@@ -277,7 +285,9 @@ sub add_entry {
 	# case 0) object not implementing 'read' method
 	croak "bad argument to ZipTiny->add_entry";
     }
+
     $modtime = time() if ! $modtime;
+
     if (defined $file_to_close) {
 	# close only in case 2)
 	close $file_to_close or croak "cannot close $fname: $!";
@@ -339,10 +349,10 @@ sub dosdate ($) {
     my ($s, $m, $h, $d, $my, $y) = localtime $unixtime;
 
     return 0 if ($y < 80);
+    return 0xffffffff if $y > 80 + 127; # year 2107
 
     my $time = ($h << 11) | ($m << 5) |  ($s >> 1);
     my $date = (($y - 80) << 9) | (($my + 1) << 5) | ($d);
-#    return 0xffffffff if $date > 0xffff;
 
     return ((($date & 0xffff) << 16) | ($time & 0xffff));
 }
@@ -383,8 +393,7 @@ sub find_entry {
 
 sub entries {
     my $self = shift;
-    my @r = ();
-    (@r, @{$self->{entries}});
+    return @{$self->{entries}}, ();
 }
 
 =head3 Method include_q(entry_name)
@@ -396,7 +405,7 @@ returns true if the file entry_name is already added to the archive.
 returns an instance of C<CompressEntry> for the entry named entry_name.
 It returns C<undef> if not found.
 
-=head3 Method entries
+=head3 Method entries()
 
 returns an fresh list of added files as instances of C<CompressEntry>.
 Modifying the list will have no effect to the generated archive.
@@ -504,7 +513,7 @@ sub make_zip {
 =head3 Method make_zip([kwd => value, ...])
 
 generates a zip archive and returns as a string.
-This method can be called several times for the same instance.
+This method can be called several times for the same instance with different parameters.
 
 Available keyword argument are as follows:
 
@@ -550,6 +559,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 =cut
+
+# Small self-test
 
 if ($0 eq __FILE__) {
     open F, "<", \"string data";
