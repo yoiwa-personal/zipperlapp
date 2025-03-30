@@ -28,7 +28,7 @@ use Fcntl; # for sysopen constants
 use File::Basename "basename";
 use File::Find ();
 use Data::Dumper ();
-use Hash::Util;
+use Scalar::Util;
 
 use re '/saa'; # strictly byte-oriented, no middle \n match
 
@@ -184,7 +184,7 @@ sub generate {
 
     my ($out_fh, $out_fh_close);
 
-    if (ref $out) {
+    if (Scalar::Util::openhandle($out) || (ref $out && $out->can('print'))) {
 	$out_fh = $out;
 	$out_fh_close = 0;
     } else {
@@ -391,14 +391,11 @@ sub zipperlapp {
     my %poptions = @_;
     my %options = ( out => undef,
 		    mainopt => undef,
-		    copy_pod => 0,
-		    quote_pod => 0,
-		    protect_pod => 2,
 		    includedir => [],
 		    searchincludedir => 1,
 		    trimlibname => 0,
-		    inhibit_lib => 0,
 		  );
+
     for my $kw (keys %options) {
 	if (exists $poptions{$kw}) {
 	    $options{$kw} = $poptions{$kw};
@@ -423,17 +420,13 @@ sub zipperlapp {
 
     my $out = $options{out};
     my $mainopt = $options{mainopt};
-    my $copy_pod = $options{copy_pod};
-    my $quote_pod = $options{quote_pod};
-    my $protect_pod = $options{protect_pod};
     my @includedir = @{$options{includedir}};
     my $searchincludedir = $options{searchincludedir};
     $self->{trimlibname} = my $trimlibname = $options{trimlibname};
-    my $inhibit_lib = $options{inhibit_lib};
 
     my $progout_fh = $self->{progout_fh};
 
-    if (!!$quote_pod + !!$poptions{base64} >= 2) {
+    if (!!$poptions{quote_pod} + !!$poptions{base64} >= 2) {
 	die "Error: --quote_pod and --base64 are exclusive\n";
     }
     unless ($poptions{compression} =~ /\A[0-9]|bzip\z/) {

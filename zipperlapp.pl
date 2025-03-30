@@ -136,6 +136,7 @@ ZipPerlApp::SFXGenerate->zipperlapp
    trimlibname => $trimlibname,
    sizelimit => $sizelimit,
    progout_fh => $progout_fh,
+   inhibit_lib => $inhibit_lib,
    debug => $debug
   );
 exit(0);
