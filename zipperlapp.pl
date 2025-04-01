@@ -209,7 +209,7 @@ Otherwise, all files specified in the argument are included.
 
 =item B<--main, -m>
 
-Specify the main module which is automatically "require"-d.  Also, a
+specifies the main module which is automatically "require"-d.  Also, a
 "she-bang" line and continuous comment lines at the top of main module
 are copied to the output.
 
@@ -219,43 +219,45 @@ main module must be explicitly specified.
 
 =item B<--includedir, -I>
 
-Specify the locations to search input files, in addition to the current
+specifies the locations to search input files, in addition to the current
 directory.
 If this option is specified multiple times, the files will be searched
 in order of the specifications.
 
-This option will have two kinds of separate effect; if C<'-Ilib File.pm'>
+This option will have two kinds of separate effects; when C<'-Ilib File.pm'>
 is speficied in the command line, as an example:
 
 =over 2
 
 =item *
 
-the command will include C<'lib/File.pm'> to the archive, if C<'File.pm'>
+The command will include C<'lib/File.pm'> to the archive, if C<'File.pm'>
 does not exist.  This behavior can be disabled by specifing
 C<'--no-search-includedir'>.
 
 =item *
 
-the file C<'lib/File.pm'> will be included to the archive as C<'File.pm'>,
+The file C<'lib/File.pm'> will be included to the archive as C<'File.pm'>,
 triming the library part of the name. This happens either when the file is
 speficied explicitly or through C<-I> option.
 This behavior can be disabled by specifing
 C<'--no-trim-includedir'>.
 
 If two or more files will share the same name after this triming,
-it will be an error and rejected.
+it will be rejected as an error.
 
 =back
 
 =item B<--output, -o>
 
-Specify the name of the output file.
+specifies the name of the output file.
 
 If omitted, either the name of the source directory or the base name
 of the main module is taken, with a postfix C<'.plz'> is appended.
 
-It is always safe to specify the output file.
+It is always better and safer to specify the output file.
+
+A single hyphen (C<->) will let output go to the standard output.
 
 =back
 
@@ -265,7 +267,7 @@ It is always safe to specify the output file.
 
 =item B<--compress>, B<-C>
 
-Specify the compression level for the Deflate algorithm.
+specifies the compression level for the Deflate algorithm.
 
 If C<-C> is specified without a digit, the highest level 9 is set.
 
@@ -279,7 +281,7 @@ when you modify the contents with zip archivers.
 
 =item B<--bzip>
 
-Use BZIP2 algorithm for compression.
+specifies to use BZIP2 algorithm for compression.
 
 This compression method is not common, but it was implemented around
 2003 (PKzip 4.6) to 2006 (Infozip 3.0f18), and most current
@@ -307,7 +309,7 @@ embedded in outputs by text editors, or (2) when the whole source code
 must be transparently visible for auditing or inspections (if even
 C<-C0> is unsatisfactory).
 
-The option combination with C<-B> is possible, but it is not very
+The combination with the C<-B> option is possible but not very
 meaningful.
 
 =back
@@ -318,29 +320,33 @@ meaningful.
 
 =item B<--copy-pod, -p>
 
-If specified, it will copy all pod (Perl's plain old document format)
+If specified, it will copy all POD (Perl's plain old document format)
 sections in the main module to the output script.
+This option is requored when the script uses the POD data of itself
+e.g. by C<Pod::Usage>.
 
 Alternatively, when compression (-C) is not used, it is likely that
 any pod-using modules may see pod sections from all of embedded
 modules within the zip file structure.  If only your main module
 contains a pod, you may be possibly depend on that "behavior" and not
-using this option, although it is not a guaranteed behavior.
+using this option, although it is not a reliable behavior.
 
 =item B<--protect-pod>
 
-Unless either compression (-C) or Base64 encoding (-B) is used, pod
-processors may see pod sections embedded in the original source
-scripts, within the zip archive; It may either be a good or not a good
-thing.
+specifies to protect any POD data inside the zip archive from being
+processed.
 
-If C<--protect-pod> is specified, the command will insert a small
-snippet of Pod to the output so that most pod processors will skip
-such "ghost" of pods.  The process is done only when it is actually
-needed.
+Unless either compression (-C) or Base64 encoding (-B) is used, POD
+sections in the original source scripts within the zip archive may be
+visible to POD data processors; it may either be or not be a good
+thing, depending on the situation.
 
-This option is automatically enabled when C<--copy-pod> is used.
-If unwanted, you can specify C<--no-protect-pod>.
+If C<--protect-pod> is specified, a small POD is inserted to the output
+so that most pod processors will skip such ghost of PODs.
+
+This option is automatically enabled, when C<--copy-pod> is used and
+a POD directive is actually contained in the archive binary.
+If the process is not wanted, you can specify C<--no-protect-pod>.
 
 =item B<--quote-pod>
 
@@ -349,8 +355,8 @@ not contain any active pod specification.  The tweak is performed only
 when it is really required, but if done, the output will loose
 zip-transparency.
 
-In most circumstances, C<--protect-pod> or C<-C> is enough, or
-C<--base64> is more reliable.
+In most circumstances, either C<--protect-pod> or C<-C> is enough, or
+when zip-transparency is not needed, C<--base64> is more reliable option.
 
 =back
 
@@ -360,22 +366,22 @@ C<--base64> is more reliable.
 
 =item B<--random-seed>
 
-Specify a seed integer for pseudorandom number generators.  Some
+specifies a seed integer for pseudorandom number generators.  Some
 features (e.g. C<--text-archive> or C<--protect-pod>) use random
-numbers to generate a unique byte sequence in the archive.  This makes
-output archives for the same input set to differ time-to-time.
-Specifying a random seed will make output somewhat deterministic for
-the same input.  It is not a strong guarantee; the output may still
-differ by small change of inputs or even small environmental changes
-such as use of different machines or system library updates.  Main
-expected use of this option is to put the archive outputs to version
-control systems such as git or subversion, making difference smaller.
+numbers to generate unique byte sequences in the archive.  This makes
+output archives for the same set of inputs to differ time-to-time.
+Specifying a random seed will make output somewhat deterministic.
+However, it is not a strong guarantee; the output may still differ by
+small change of inputs or even small environmental changes such as use
+of different machines or system library updates.  Main expected use of
+this option is to put the archive outputs to version control systems
+such as git or subversion, making differences as small as possible.
 
-In Perl, seeds to specify will be an 32-bit integer.
+In Perl, the seed will be an 32-bit integer.
 
 =item B<--inhibit-use-lib>
 
-An experimental option.  It will nullify effect of C<'use lib ...'>,
+An experimental option:  it will nullify effect of C<'use lib ...'>,
 so that local files not included in the archive will not be read.
 It will break if any system library uses C<'lib'> pragma, thus
 use of the snippet in the APIS section is recommended.
@@ -385,8 +391,8 @@ use of the snippet in the APIS section is recommended.
 =head1 APIS
 
 There are currently no APIs visible to user scripts except import
-hooks.  Package C<ZipPerlApp> is provided in the zipped script, so if
-you need to change some behavior upon packaging, something like
+hooks.  The package C<ZipPerlApp> is provided in the zipped script, so
+if you need to change some behavior upon packaging, something like
 
     use FindBin;
     use if (! scalar %ZipPerlApp::), lib => $FindBin::Bin;
@@ -414,7 +420,7 @@ also works.
 
 =item *
 
-Only pure Perl scripts or modules can be loaded from zip archive. For
+Only pure Perl scripts or modules can be loaded from zip archives. For
 example, autoloading (*.al) or dynamic loading (*.so, *.dll) will not
 be available.
 
@@ -442,17 +448,19 @@ be aware of that.
 =item *
 
 All files are decoded into the memory at the beginning of the program
-execution.  It is not wise to include unneeded files into the archive.
+execution.  It is not wise to include unneeded files (especially large
+ones) into the archive.
 
 =back
 
 =head1 IMPLEMENTATION
 
 A zip archive of module files are stored in the C<__DATA__> section.
-A minimal parser for Zip archives is embedded to the output script,
-and it will extract the source codes of all modules to an on-memory
-storage at the start-up.  An "import hook" subroutine is put into
-Perl's C<@INC> facility to load those modules by C<require> or C<use>.
+A minimal parser for Zip archive format is embedded to the beginning
+of the output script, and it will extract the source codes of all
+modules to an on-memory storage at the start-up.  An import hook
+subroutine is put into Perl's C<@INC> facility to load those modules
+by C<require> or C<use>.
 
 This enables use of C<__DATA__> sections in each included module.
 

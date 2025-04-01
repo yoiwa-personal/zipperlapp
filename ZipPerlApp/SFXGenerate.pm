@@ -29,6 +29,7 @@ use File::Basename "basename";
 use File::Find ();
 use Data::Dumper ();
 use Scalar::Util;
+use IO::File;
 
 use re '/saa'; # strictly byte-oriented, no middle \n match
 
@@ -93,6 +94,7 @@ generating and running time. (default: 64Mi bytes)
 sub add_entry {
     my $self = shift;
     $self->{zip}->add_entry(@_);
+    return $self;
 }
 
 =head2 add_entry(entry_name, real_name)
@@ -184,12 +186,12 @@ sub generate {
 
     my ($out_fh, $out_fh_close);
 
-    if (Scalar::Util::openhandle($out) || (ref $out && $out->can('print'))) {
+    if (Scalar::Util::openhandle($out) || (Scalar::Util::blessed($out) && $out->can('print'))) {
 	$out_fh = $out;
 	$out_fh_close = 0;
     } else {
 	print $progout_fh "writing to $out\n" if $progout_fh;
-	sysopen($out_fh, $out, O_WRONLY | O_CREAT | O_TRUNC, $mode) or die "write: $!";
+	$out_fh = IO::File->new($out, O_WRONLY | O_CREAT | O_TRUNC, $mode) or die "write: $!";
 	$out_fh_close = 1;
     }
 

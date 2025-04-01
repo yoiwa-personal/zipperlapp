@@ -64,11 +64,6 @@ Note that zip archive will only have a 2-second duration.
 an informative source of the content.
 Only used as for a diagnostic purpose.
 
-=item parent:
-
-the ZipTiny module instance generating the CompressEntry instance.
-Used to refer sizelimit configuration.
-
 =item cdata, zipflags:
 
 C<cdata> is the compressed data stream to be stored in acrhive.
@@ -87,7 +82,8 @@ package ZipPerlApp::ZipTiny::CompressEntry {
 
     use Carp;
 
-    use fields qw(fname content mtime source parent compressflag cdata zipflags);
+    use fields qw(fname content mtime source compressflag cdata zipflags
+		_sizelimit _debug_fh);
 
     sub new {
 	my $self = shift;
@@ -106,10 +102,17 @@ package ZipPerlApp::ZipTiny::CompressEntry {
 	  defined $h{content} &&
 	  defined $h{mtime};
 
+	# prefetch some information from parent to avoid circular reference
+	$h{_debug_fh} = $h{parent}->{debug} && $h{parent}->{debug_fh};
+	$h{_sizelimit} = $h{parent}->{sizelimit};
+	delete $h{parent};
+
 	%$self = %h;
 	$self->{compressflag} = undef;
 	$self->{cdata} = undef;
 	$self->{zipflags} = undef;
+
+	# Scalar::Util::weaken($self->{parent}); # break circular reference
 
 	return $self;
     }
@@ -124,7 +127,8 @@ package ZipPerlApp::ZipTiny::CompressEntry {
     sub compress {
 	my ($self, $compressflag) = @_;
 
-	my $debug_fh = $self->{parent}->{debug} && $self->{parent}->{debug_fh};
+	my $debug_fh = $self->{_debug_fh};
+	my $sizelimit = $self->{_sizelimit};
 
 	return if defined $self->{compressflag} && $self->{compressflag} eq $compressflag;
 
@@ -134,8 +138,7 @@ package ZipPerlApp::ZipTiny::CompressEntry {
 
 	my @zipflags = (0, 10, 0);
 
-	croak "error: $fname: too large data"
-	  if (defined $self->{parent} && length($content) > $self->{parent}{sizelimit});
+	croak "error: $fname: too large data" if (length($content) > $sizelimit);
 
 	if (lc $compressflag eq 'bzip') {
 	    require IO::Compress::Bzip2;
@@ -149,14 +152,14 @@ package ZipPerlApp::ZipTiny::CompressEntry {
 	    @zipflags = (8, 20, $flags);
 	}
 	printf $debug_fh "compressing %s: %d -> %d\n", $self->{fname}, length($content), length($cdata) if $debug_fh;
-	# und`129o compression if it is not shrunk
+	# undo compression if it is not shrunk
 	if (length($content) <= length($cdata)) {
 	    $cdata = $content;
 	    @zipflags = (0, 10, 0);
 	}
 
 	croak "error: $fname: too large data after compression"
-	  if (defined $self->{parent} && length($cdata) > $self->{parent}{sizelimit});
+	  if (length($content) > $sizelimit);
 
 	$self->{cdata} = $cdata;
 	$self->{compressflag} = $compressflag;
@@ -303,6 +306,8 @@ sub add_entry {
 
     push @{$self->{entries}}, $obj;
     $self->{entries_hash}->{$entname} = $obj;
+
+    return $self;
 }
 
 
@@ -370,6 +375,8 @@ sub add_entries {
 	    $self->add_entry($e);
 	}
     }
+
+    return $self;
 }
 
 =head3 Method add_entry(entry...)
