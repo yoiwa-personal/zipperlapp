@@ -37,7 +37,8 @@ use Scalar::Util;
 =head2 class ZipPerlApp::ZipTiny::CompressEntry
 
 CompressEntry represents a file entry for zip archive.
-Automatically generated from ZipTiny.
+
+Instances for this class is generated from ZipTiny.
 
 =head3 Readable fields
 
@@ -85,8 +86,8 @@ package ZipPerlApp::ZipTiny::CompressEntry {
     use fields qw(fname content mtime source compressflag cdata zipflags
 		_sizelimit _debug_fh);
 
-    sub new {
-	my $self = shift;
+    sub new ($@) {
+	my __PACKAGE__ $self = shift;
 	$self = fields::new($self) unless ref $self;
 
 	my %h = ( fname => undef,
@@ -117,14 +118,25 @@ package ZipPerlApp::ZipTiny::CompressEntry {
 	return $self;
     }
 
-    sub fname { return $_[0]->{fname} }
-    sub content { return $_[0]->{content} }
-    sub mtime { return $_[0]->{mtime} }
-    sub cdata { return $_[0]->{cdata} }
-    sub zipflags { return @{$_[0]->{zipflags}} }
-    sub source { return $_[0]->{source} }
+    sub fname ($) { return $_[0]->{fname} }
+    sub content ($) { return $_[0]->{content} }
+    sub mtime ($) { return $_[0]->{mtime} }
+    sub cdata ($) { return $_[0]->{cdata} }
+    sub zipflags ($) { return @{$_[0]->{zipflags}} }
+    sub source ($) { return $_[0]->{source} }
 
-    sub compress {
+=head3 Method compress(compressflag)
+
+generates a compress data stream for the entry.
+
+Argument compress flag is either an integer 0-9 for zlib compression levels, or
+the string 'bzip' for Bzip2 compression.
+
+Usually not needed to call it directly; ZipTiny::make_zip will call it automatically.
+
+=cut
+
+    sub compress ($$) {
 	my ($self, $compressflag) = @_;
 
 	my $debug_fh = $self->{_debug_fh};
@@ -166,17 +178,6 @@ package ZipPerlApp::ZipTiny::CompressEntry {
 	$self->{zipflags} = \@zipflags;
     }
 
-=head3 Method compress(compressflag)
-
-generates a compress data stream for the entry.
-
-Argument compress flag is either an integer 0-9 for zlib compression levels, or
-the string 'bzip' for Bzip2 compression.
-
-Usually not needed to call it directly; ZipTiny::make_zip will call it automatically.
-
-=cut
-
 }
 
 =head2 class ZipPerlApp::ZipTiny
@@ -190,8 +191,17 @@ by C<make_zip>.
 
 use fields qw(entries entries_hash sizelimit debug debug_fh);
 
-sub new {
-    my $self = shift;
+=head3 Method new([list...])
+
+instantiates a factory for zip archive.
+
+If a list of arguments is given,
+these are processed as C<add_entries> below, as a shortcut.
+
+=cut
+
+sub new ($@) {
+    my __PACKAGE__ $self = shift;
 
     $self = fields::new($self) unless ref $self;
     %$self = (entries => [],
@@ -206,25 +216,72 @@ sub new {
     return $self;
 }
 
-=head3 Method new([list...])
+=head3 Method __setopt(sizelimit, debug, debug_fh)
 
-instantiates a factory for zip archive.
+set some configuration values.
 
-if a list of arguments are given,
-these are processed as C<add_entries> below, as a shortcut.
+=over 8
+
+=item sizelimit:
+
+Size for possible maximal input, in bytes.
+
+=item debug:
+
+Whether to emit some debugging messages.
+
+=item sizelimit:
+
+Filehandle for debugging messages to be printed.
+
+=back
 
 =cut
 
-sub __setopt {
-    my $self = shift;
+sub __setopt ($;$$$) {
+    my __PACKAGE__ $self = shift;
     my ($sizelimit, $debug, $debug_fh) = @_;
     $self->{sizelimit} = ($sizelimit // 64 * 1048576);
     $self->{debug} = $debug || 0;
     $self->{debug_fh} = $debug_fh if defined $debug_fh;
 }
 
-sub add_entry {
-    my $self = shift;
+=head3 Method add_entry(entry name, [sources...])
+
+adds a file entry to the zip archive.
+
+The first argument is always file name to be stored in the archive.
+The possible patterns for arguments are as follows:
+
+=over 4
+
+=item (entry_name):
+
+stores the file named entry_name.
+
+=item (entry_name, real_name)
+
+stores the file named real_name, but stored as entry_name.
+
+=item (entry_name, filehandle)
+
+stores the content read from the filehandle.
+
+=item (entry_name, \$string)
+
+stores the content of the C<$string>.
+
+=item (entry_name, \$string, modtime)
+
+stores the content of the C<$string>.
+Its modification time is set to modtime.
+
+=back
+
+=cut
+
+sub add_entry ($$;$$) {
+    my __PACKAGE__ $self = shift;
     my ($entname, $content, $modtime) = @_;
 
     my $source = $content;
@@ -310,42 +367,6 @@ sub add_entry {
     return $self;
 }
 
-
-=head3 Method add_entry(entry name, [sources...])
-
-adds a file entry to the zip archive.
-
-The first argument is always file name to be stored in the archive.
-The possible patterns for arguments are as follows:
-
-=over 4
-
-=item (entry_name):
-
-stores the file named entry_name.
-
-=item (entry_name, real_name)
-
-stores the file named real_name, but stored as entry_name.
-
-=item (entry_name, filehandle)
-
-stores the content read from the filehandle.
-
-=item (entry_name, \$string)
-
-stores the content of the C<$string>.
-
-=item (entry_name, \$string, modtime)
-
-stores the content of the C<$string>.
-Its modification time is set to modtime.
-
-=back
-
-=cut
-
-
 # convert unix timestamp to FAT/MSDOS format used in zip archive.
 # depending on TZ setting.
 
@@ -362,8 +383,17 @@ sub dosdate ($) {
     return ((($date & 0xffff) << 16) | ($time & 0xffff));
 }
 
-sub add_entries {
-    my $self = shift;
+=head3 Method add_entries(entry...)
+
+adds several file entries to the zip archive.
+
+Each argument is a list reference containing arguments to
+C<add_entry>.
+
+=cut
+
+sub add_entries ($@) {
+    my __PACKAGE__ $self = shift;
 
     for my $e (@_) {
 	if (ref $e eq 'HASH') {
@@ -377,30 +407,6 @@ sub add_entries {
     }
 
     return $self;
-}
-
-=head3 Method add_entry(entry...)
-
-adds several file entries to the zip archive.
-
-Each argument is a list reference containing arguments to
-C<add_entry>.
-
-=cut
-
-sub include_q {
-    my ($self, $f) = @_;
-    return exists $self->{entries_hash}->{$f};
-}
-
-sub find_entry {
-    my ($self, $f) = @_;
-    return $self->{entries_hash}->{$f};
-}
-
-sub entries {
-    my $self = shift;
-    return @{$self->{entries}}, ();
 }
 
 =head3 Method include_q(entry_name)
@@ -419,8 +425,55 @@ Modifying the list will have no effect to the generated archive.
 
 =cut
 
-sub make_zip {
-    my ($self, @options) = @_;
+sub include_q ($$) {
+    my __PACKAGE__ $self = shift;
+    my ($f) = @_;
+    return exists $self->{entries_hash}->{$f};
+}
+
+sub find_entry ($$) {
+    my __PACKAGE__ $self = shift;
+    my ($f) = @_;
+    return $self->{entries_hash}->{$f};
+}
+
+sub entries ($) {
+    my __PACKAGE__ $self = shift;
+    return @{$self->{entries}}, ();
+}
+
+=head3 Method make_zip([kwd => value, ...])
+
+generates a zip archive and returns as a string.
+This method can be called several times for the same instance with different parameters.
+
+Available keyword argument are as follows:
+
+=over 4
+
+=item compress:
+
+zlib compression levels (1-9), 0 for no compression, 'bzip' for bzip2 compression.
+
+=item header:
+
+data prepended to archive
+
+=item offset:
+
+size of data to be prepented to archive (in addition to HEADER)
+
+=item trailercomment:
+
+comment field of zip file, up to 65535 bytes.
+
+=back
+
+=cut
+
+sub make_zip ($@) {
+    my __PACKAGE__ $self = shift;
+    my (@options) = @_;
 
     if ($self eq 'ZipPerlApp::ZipTiny') {
 	$self = shift @options;
@@ -516,33 +569,24 @@ sub make_zip {
     return $out;
 }
 
+# Small self-test
 
-=head3 Method make_zip([kwd => value, ...])
+if ($0 eq __FILE__) {
+    open F, "<", \"string data";
+    open R, "<", \"string data raw";
+    open P, "-|", "date";
+    my $z = ZipPerlApp::ZipTiny::make_zip
+      ( [["1.dat", \"data 1"],
+	 ["2.dat", \"data 2"],
+	 ["string.dat", \*F],
+	 ["stringraw.dat", \*R],
+	 ["pipe.dat", \*P],
+	 [$0]],
+	compress => ($ARGV[0] // 9), header => "#!!", trailercomment => "!!#");
+    print $z;
+}
 
-generates a zip archive and returns as a string.
-This method can be called several times for the same instance with different parameters.
-
-Available keyword argument are as follows:
-
-=over 4
-
-=item compress:
-
-zlib compression levels (1-9), 0 for no compression, 'bzip' for bzip2 compression.
-
-=item header:
-
-data prepended to archive
-
-=item offset:
-
-size of data to be prepented to archive (in addition to HEADER)
-
-=item trailercomment:
-
-comment field of zip file, up to 65535 bytes.
-
-=back
+1;
 
 =head1 REFERENCE
 
@@ -566,22 +610,3 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 =cut
-
-# Small self-test
-
-if ($0 eq __FILE__) {
-    open F, "<", \"string data";
-    open R, "<", \"string data raw";
-    open P, "-|", "date";
-    my $z = ZipPerlApp::ZipTiny::make_zip
-      ( [["1.dat", \"data 1"],
-	 ["2.dat", \"data 2"],
-	 ["string.dat", \*F],
-	 ["stringraw.dat", \*R],
-	 ["pipe.dat", \*P],
-	 [$0]],
-	compress => ($ARGV[0] // 9), header => "#!!", trailercomment => "!!#");
-    print $z;
-}
-
-1;

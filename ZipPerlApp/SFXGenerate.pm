@@ -1,4 +1,4 @@
-# ZipPerlApp::SFXGenerate: generating pure-Perl SFX archives.
+# ZipPerlApp::SFXGenerate: generating pure-Perl self-executable archives.
 #
 # Part of (core of) zipperlapp. (c) 2019-2025 Yutaka OIWA.
 # Licensed under Apache License Version 2.0.
@@ -14,8 +14,8 @@ ZipPerlApp::SFXGenerate: a generator for pure-perl SFX archives.
 
 =head1 DESCRIPTION
 
-This module creates a perl script with simple zip archive,
-can be used as a self-contained script for several modules.
+This module creates a perl script with simple zip archive embedded,
+which can be used as a self-contained executable.
 
 There are two sets of interfaces: middle level (library level) and
 command level.
@@ -40,19 +40,36 @@ use ZipPerlApp::ZipTiny;
 
 our $DEBUG = 0;
 
-### Mid-level interfaces
+### Mid-level interface
 
-=head1 Middle-level interfaces
+=head1 Middle-level interface
 
-The middle-level interfaces has the following methods:
+The middle-level interface has the following class and methods.
 
 =cut
 
 use fields qw(possible_out main maintype includedir trimlibname
               sizelimit debug interactive diagout_fh progout_fh zip);
 
-sub new {
-    my $self = shift;
+=head2 SFXGenerate->new([kwd => value, ...])
+
+C<new> creates a new instance for self-executables generator.
+
+It has the following keyword arguments:
+
+sizelimit: a file size limit for each zip entry, used for both
+generating and running time. (default: 64Mi bytes)
+
+progout_fh: a reference to filehandle to print progress messages.
+
+diagout_fh: a reference to filehandle to print diagnostic messages.
+
+debug: an integer for verboseness of debugging messages.
+
+=cut
+
+sub new ($@) {
+    my __PACKAGE__ $self = shift;
 
     $self = fields::new($self) unless ref $self;
 
@@ -65,7 +82,7 @@ sub new {
     die "ZipPerlApp::SFXGenerate->new: bad keyword arguments" unless
       scalar keys %options == 4;
 
-    my $zip = ZipPerlApp::ZipTiny->new();
+    my ZipPerlApp::ZipTiny $zip = ZipPerlApp::ZipTiny->new();
     $zip->__setopt($options{sizelimit}, $options{debug}, $options{diagout_fh});
 
     %$self = (possible_out => undef,
@@ -80,36 +97,61 @@ sub new {
     return $self;
 }
 
-=head2 SFXGenerate->new([kwd => value, ...])
-
-C<new> creates a new instance for SFX generator.
-
-It has the following keyword arguments:
-
-sizelimit: a file size limit for each zip entry, used for both
-generating and running time. (default: 64Mi bytes)
-
-=cut
-
-sub add_entry {
-    my $self = shift;
-    $self->{zip}->add_entry(@_);
-    return $self;
-}
-
 =head2 add_entry(entry_name, real_name)
 
-Add a file to the sfx archive.
+adds a file to the self-executable archive.
 
 If two file names are passed, these will be used as a
 name for zip entry, and name of the file to read.
 
-See C<ZipTiny::add_entry> for more argument patterns.
+See C<ZipTiny::add_entry> for other argument patterns.
 
 =cut
 
-sub generate {
-    my $self = shift;
+sub add_entry ($$;$$) {
+    my __PACKAGE__ $self = shift;
+    $self->{zip}->add_entry(@_);
+    return $self;
+}
+
+=head2 generate(kwd => value, ...)
+
+generates a sfx archive and write to a file.
+
+The following keyword arguments are accepted:
+
+=over 4
+
+=item out
+
+(mandatory) A file-name or a filehandle for output.
+
+=item main
+
+(mandatory) An entry name for the "main script" in the archive.
+The stored "file" of that name will be loaded first.
+
+=item compression
+
+The compression level (0--9 or string 'bzip') for the archive.
+
+=item base64, textarchive, copy_pod, quote_pod, inhibit_lib
+
+These are boolean corresponding to the options of C<zipperlapp>.
+See man (or POD) of C<zipperlapp> for details.
+
+=item protect_pod
+
+This is tri-valued; value 0 corresponds to C<--no-protect_pod>,
+1 to C<--protect_pod>.  The value 2 will let process done
+only when POD-like byte sequence is found in the binary archive data.
+
+=back
+
+=cut
+
+sub generate ($@) {
+    my __PACKAGE__ $self = shift;
     my $progout_fh = $self->{progout_fh};
     my $diagout_fh = $self->{debug} && $self->{diagout_fh};
 
@@ -200,139 +242,13 @@ sub generate {
     close $out_fh or die "$!" if $out_fh_close;
 }
 
-=head2 generate(kwd => value, ...)
-
-Generate a sfx archive and write to a file.
-
-The following keyword arguments are accepted:
-
-=over 4
-
-=item out
-
-(mandatory) A file-name or a filehandle for output.
-
-=item main
-
-(mandatory) An entry name for the "main script" in the archive.
-The stored "file" of that name will be loaded first.
-
-=item compression
-
-The compression level (0--9 or string 'bzip') for the archive.
-
-=item base64, textarchive, copy_pod, quote_pod, protect_pod, inhibit_lib
-
-These are boolean corresponding to the options of C<zipperlapp>.
-See man (or POD) of C<zipperlapp> for details.
-
-=back
-
-=cut
-
 # High-level (command line level) interface
 
-=head1 High-level interfaces
+=head1 High-level interface
 
 The high-level interface has a single class method called C<zipperlapp>.
 
-=cut
-
-## support routines
-
-sub canonicalize_filename {
-    my ($self, $fname, $fixedprefix) = @_;
-
-    # canonicalize input path
-    $fname =~ s(\A/+)(/)sg;
-    my @fname = split('/', $fname);
-    for (my $pos = 0; exists $fname[$pos]; $pos++) {
-	next if $pos == -1;
-	if ($fname[$pos] eq '.') {
-	    splice @fname, $pos, 1;
-	    redo;
-	} elsif ($pos != 0 &&
-		 $fname[$pos] eq '..' &&
-		 $fname[$pos-1] ne '' && # not parent-of-root
-		 $fname[$pos-1] ne '..' # parent of parent
-		) {
-	    splice @fname, $pos-1, 2;
-	    $pos--;
-	    redo;
-	}
-    }
-    $fname = join("/", @fname);
-
-    # trim names with include directory
-    my $ename = $fname;
-    if ($self->{trimlibname}) {
-	my @includedir = @{$self->{includedir}};
-	if (defined $fixedprefix) {
-	    unshift @includedir, $fixedprefix;
-	}
-	for my $l (@includedir) {
-	    my $libdir = "$l/";
-	    my $length = length($libdir);
-	    if (substr($ename, 0, length($libdir)) eq $libdir) {
-		$ename = substr($ename, $length);
-		last;
-	    }
-	}
-    }
-
-    die "$ename: name is absolute\n" if $ename =~ m@\A/@s;
-    die "$ename: name contains ..\n" if $ename =~ m@(\A|/)../@s;
-
-    return wantarray ? ($fname, $ename) : $ename;
-}
-
-sub cmd_add_file {
-    my ($self, $fname, $fixedprefix) = @_;
-    my $zip = $self->{zip};
-    my $maintype = $self->{maintype};
-    # behavior of main mode:
-    #  1: add if *.pl, duplication is error
-    #  2: add if first
-    #  3: noop
-
-    my ($fname, $ename) = $self->canonicalize_filename($fname, $fixedprefix);
-    die "cannot find $fname: $!" unless -e $fname;
-    die "$fname is not a plain file" unless -f $fname;
-    if ($zip->include_q($ename)) {
-	my $ent = $zip->find_entry($ename);
-	if ($fname ne $ent->source) {
-	    die "duplicated files: $fname and ${\ ($ent->source)} will be same name in the archive";
-	} else {
-	    # skip;
-	}
-    } else {
-	if ($maintype == 1) {
-	    if ($ename =~ /\.pl$/s) {
-		die "found two .pl files: $self->{main} and $ename\n" if defined $self->{main};
-		$self->{main} = $ename;
-	    }
-	} elsif ($maintype == 2) {
-	    $self->{main} = $ename unless defined $self->{main};
-	    $self->{possible_out} = $ename unless defined $self->{possible_out};
-	}
-	$zip->add_entry($ename, $fname);
-    }
-}
-
-sub cmd_add_dir {
-    my ($self, $fname, $prefix) = @_;
-    File::Find::find
-	({wanted => sub {
-	      my $f = $File::Find::name;
-	      if ($f =~ /\.p[lm]\z/s && !($f =~ m((\A|\/)\.[^\/])s)) {
-		  $self->cmd_add_file($f, $prefix);
-	      }
-	  },
-	  no_chdir => 1
-	 }, $fname);
-}
-
-=head2 SFXGenerate->zipperlapp(\@files, [kwd => value, ...])
+=head2 SFXGenerate->zipperlapp(\@files, kwd => value, ...)
 
 C<zipperlapp> creates a SFX archive.
 
@@ -354,8 +270,8 @@ C<trimlibname> are booleans corresponding to the command options.
 =item *
 
 The option C<out> can contain a file name or a reference to Perl file-handle.
-To redirect output to standard output, pass C<\*STDOUT> (the backslash is important),
-and also specify C<progout_fh> below.
+To redirect output to the standard output, set this option to C<\*STDOUT>,
+and also specify C<progout_fh> below to C<\*STDERR> or others..
 
 =item *
 
@@ -363,11 +279,11 @@ C<mainopt> is a string for C<-m> option.
 
 =item *
 
-C<includedir> is an array reference for C<-I> option.
+C<includedir> is an array reference for multiple C<-I> options.
 
 =item *
 
-C<compression> can contain integers 0--9, or a string 'bzip'.
+C<compression> contains an integer 0-9, or a string 'bzip'.
 
 =item *
 
@@ -381,8 +297,8 @@ When C<\*STDOUT> is passed to C<out>, also set this property to C<\*STDERR> or C
 
 =cut
 
-sub zipperlapp {
-    my $self = shift;
+sub zipperlapp ($@) {
+    my __PACKAGE__ $self = shift;
 
     if (ref $self eq 'ARRAY') { # called as module function
 	unshift @_, $self;
@@ -519,10 +435,108 @@ sub zipperlapp {
     $self->generate(out => $out, main => $self->{main}, %poptions);
 }
 
-# low-level routines
+## support routines for the high-level interface. Not to be used directly.
 
-sub create_sfx {
-    my ($self, $shebang, $main, $pod, $textarchive, $compression, $base64, $quote, $protect_pod, $inhibit_lib) = @_;
+sub canonicalize_filename ($$;$) {
+    my __PACKAGE__ $self = shift;
+    my ($fname, $fixedprefix) = @_;
+
+    # canonicalize input path
+    $fname =~ s(\A/+)(/)sg;
+    my @fname = split('/', $fname);
+    for (my $pos = 0; exists $fname[$pos]; $pos++) {
+	next if $pos == -1;
+	if ($fname[$pos] eq '.') {
+	    splice @fname, $pos, 1;
+	    redo;
+	} elsif ($pos != 0 &&
+		 $fname[$pos] eq '..' &&
+		 $fname[$pos-1] ne '' && # not parent-of-root
+		 $fname[$pos-1] ne '..' # parent of parent
+		) {
+	    splice @fname, $pos-1, 2;
+	    $pos--;
+	    redo;
+	}
+    }
+    $fname = join("/", @fname);
+
+    # trim names with include directory
+    my $ename = $fname;
+    if ($self->{trimlibname}) {
+	my @includedir = @{$self->{includedir}};
+	if (defined $fixedprefix) {
+	    unshift @includedir, $fixedprefix;
+	}
+	for my $l (@includedir) {
+	    my $libdir = "$l/";
+	    my $length = length($libdir);
+	    if (substr($ename, 0, length($libdir)) eq $libdir) {
+		$ename = substr($ename, $length);
+		last;
+	    }
+	}
+    }
+
+    die "$ename: name is absolute\n" if $ename =~ m@\A/@s;
+    die "$ename: name contains ..\n" if $ename =~ m@(\A|/)../@s;
+
+    return wantarray ? ($fname, $ename) : $ename;
+}
+
+sub cmd_add_file ($$;$) {
+    my __PACKAGE__ $self = shift;
+    my ($fname, $fixedprefix) = @_;
+    my $zip = $self->{zip};
+    my $maintype = $self->{maintype};
+    # behavior of main mode:
+    #  1: add if *.pl, duplication is error
+    #  2: add if first
+    #  3: noop
+
+    my ($fname, $ename) = $self->canonicalize_filename($fname, $fixedprefix);
+    die "cannot find $fname: $!" unless -e $fname;
+    die "$fname is not a plain file" unless -f $fname;
+    if ($zip->include_q($ename)) {
+	my $ent = $zip->find_entry($ename);
+	if ($fname ne $ent->source) {
+	    die "duplicated files: $fname and ${\ ($ent->source)} will be same name in the archive";
+	} else {
+	    # skip;
+	}
+    } else {
+	if ($maintype == 1) {
+	    if ($ename =~ /\.pl$/s) {
+		die "found two .pl files: $self->{main} and $ename\n" if defined $self->{main};
+		$self->{main} = $ename;
+	    }
+	} elsif ($maintype == 2) {
+	    $self->{main} = $ename unless defined $self->{main};
+	    $self->{possible_out} = $ename unless defined $self->{possible_out};
+	}
+	$zip->add_entry($ename, $fname);
+    }
+}
+
+sub cmd_add_dir ($$;$) {
+    my __PACKAGE__ $self = shift;
+    my ( $fname, $prefix) = @_;
+    File::Find::find
+	({wanted => sub {
+	      my $f = $File::Find::name;
+	      if ($f =~ /\.p[lm]\z/s && !($f =~ m((\A|\/)\.[^\/])s)) {
+		  $self->cmd_add_file($f, $prefix);
+	      }
+	  },
+	  no_chdir => 1
+	 }, $fname);
+}
+
+# low-level routines.   Not to be used directly, usually.
+
+sub create_sfx ($$$$$$$$$$) {
+    my __PACKAGE__ $self = shift;
+    my ($shebang, $main, $pod, $textarchive, $compression, $base64, $quote, $protect_pod, $inhibit_lib) = @_;
 
     my $debug = $self->{debug};
     my $diagout_fh = $self->{diagout_fh};
@@ -606,8 +620,8 @@ sub create_sfx {
     return $header, $zipdata;
 }
 
-sub create_textarchive {
-    my ($self) = shift;
+sub create_textarchive ($) {
+    my $self = shift;
     my $debug = $self->{debug};
     my $diagout_fh = $self->{diagout_fh};
 
@@ -629,12 +643,12 @@ sub create_textarchive {
     return $zipdat;
 }
 
-sub quote_required {
+sub quote_required ($) {
     my ($zipdat) = @_;
     return (index($zipdat, "\n=") != -1);
 }
 
-sub script () {
+sub script ($@) {
     my ($features, %replace) = @_;
     my $script = &script_body();
 
@@ -643,17 +657,6 @@ sub script () {
     $script =~ s[@@([A-Z0-9_]+)@@]
 		[%replace{$1} // die "internal error: no replacement"]eg;
     return $script;
-}
-
-if (__FILE__ eq $0) {
-    my $s = ZipPerlApp::SFXGenerate->new();
-    for my $f (["SFXGenerate.pm", "SFXGenerate.pm"],
-	       ["ZipTiny.pm", "ZipTiny.pm"]) {
-	$s->add_entry(@$f);
-    }
-    $s->generate(out => "test.plz",
-		 main => "ZipTiny.pm",
-		 compression => 6, @ARGV);
 }
 
 sub script_body () { <<'EOS'; }
@@ -802,6 +805,17 @@ package main {
 package @@PKGNAME@@;
 __DATA__
 EOS
+
+if (__FILE__ eq $0) {
+    my $s = ZipPerlApp::SFXGenerate->new();
+    for my $f (["SFXGenerate.pm", "SFXGenerate.pm"],
+	       ["ZipTiny.pm", "ZipTiny.pm"]) {
+	$s->add_entry(@$f);
+    }
+    $s->generate(out => "test.plz",
+		 main => "ZipTiny.pm",
+		 compression => 6, @ARGV);
+}
 
 1;
 
