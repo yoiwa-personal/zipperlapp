@@ -349,7 +349,6 @@ sub zipperlapp ($@) {
     }
     unless ($poptions{compression} =~ /\A[0-9]|bzip\z/) {
 	die "Error: bad --compress=$poptions{compression} (should be 0 to 9)";
-	pod2usage(2);
     }
 
     $self->{possible_out} = undef;
@@ -419,9 +418,9 @@ sub zipperlapp ($@) {
 
     if (! defined $out) {
 	if (!$self->{possible_out} or $self->{possible_out} eq '.') {
-	    die "cannot guess name";
+	    die "cannot guess name for the output: please specify -o";
 	}
-	$out = basename $self->{possible_out}; # for a while
+	$out = basename $self->{possible_out};
 	$out =~ s/(\.pl)?\z/\.plz/;
 	say "output is set to: $out";
     }
@@ -437,6 +436,7 @@ sub zipperlapp ($@) {
 
 ## support routines for the high-level interface. Not to be used directly.
 
+# canonicalize_filename: compute in-archive entry names from real file names.
 sub canonicalize_filename ($$;$) {
     my __PACKAGE__ $self = shift;
     my ($fname, $fixedprefix) = @_;
@@ -484,6 +484,7 @@ sub canonicalize_filename ($$;$) {
     return wantarray ? ($fname, $ename) : $ename;
 }
 
+# cmd_add_file: process a single file in the command line.
 sub cmd_add_file ($$;$) {
     my __PACKAGE__ $self = shift;
     my ($fname, $fixedprefix) = @_;
@@ -518,9 +519,10 @@ sub cmd_add_file ($$;$) {
     }
 }
 
+# cmd_add_file: process a single directory in the command line.
 sub cmd_add_dir ($$;$) {
     my __PACKAGE__ $self = shift;
-    my ( $fname, $prefix) = @_;
+    my ($fname, $prefix) = @_;
     File::Find::find
 	({wanted => sub {
 	      my $f = $File::Find::name;
@@ -550,7 +552,7 @@ sub create_sfx ($$$$$$$$$$) {
     if ($protect_pod) {
 	if ($pod ne "" or $protect_pod == 1) {
 	    my $podsig;
-	    while () {
+	    while (1) {
 		$podsig = sprintf("POD_ESCAPE_ZipPerlApp_%08d", int(rand(100000000)));
 		last unless (grep { index($_->content(), $podsig) != -1 or
 				      index($_->fname(), $podsig) != -1 } ($zip->entries()));
@@ -610,7 +612,8 @@ sub create_sfx ($$$$$$$$$$) {
     }
     if ($quote eq 'quote') {
 	$zipdata =~ s/^=/==/mg;
-	# quoting breaks archive structure.
+	# Quoting breaks the ZIP archive structure.
+	# We will also break ZIP signatures so that zip archivers will not confuse.
 	$zipdata =~ s/PK([\000-\037][\000-\037])/PK\000$1/g;
     } elsif ($quote eq 'base64') {
 	require MIME::Base64;
@@ -655,7 +658,7 @@ sub script ($@) {
     1 while $script =~ s[^#BEGIN\ ([A-Z0-9_]+)\n(.*?)^#END\ \1\n]
 			[grep ($_ eq $1, @$features) ? $2 : ""]mseg;
     $script =~ s[@@([A-Z0-9_]+)@@]
-		[%replace{$1} // die "internal error: no replacement"]eg;
+		[%replace{$1} // die "internal error: no replacement for $1"]eg;
     return $script;
 }
 
@@ -704,7 +707,7 @@ sub prepare {
 	my $hdr = read_data(4);
 #BEGIN ZIPARCHIVE
         # This function assumes a "correct" zip archive,
-        # using per-file headers instead of the central archive.
+        # using per-file headers instead of the central directory.
 	if ($hdr eq "PK\3\4") {
 	    # per_file zip header
 	    my (undef, $flags, $comp, undef, undef, $crc,
@@ -788,7 +791,7 @@ prepare();
 unshift @INC, \&provide;
 #BEGIN INHIBITLIB
 
-$source{'lib.pm'} = "package lib; sub import () { } 1;" if $CONFIG{inhibit_lib};
+$source{'lib.pm'} = "package lib; sub import { } 1;" if $CONFIG{inhibit_lib};
 #END INHIBITLIB
 
 #BEGIN MAIN
@@ -806,6 +809,7 @@ package @@PKGNAME@@;
 __DATA__
 EOS
 
+# tiny test
 if (__FILE__ eq $0) {
     my $s = ZipPerlApp::SFXGenerate->new();
     for my $f (["SFXGenerate.pm", "SFXGenerate.pm"],
