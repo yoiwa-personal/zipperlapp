@@ -783,9 +783,13 @@ sub provide {
 	my $str = $source{$fname};
 	open my $fh, "<", \$str or fatal "string IO failed.";
         my $ffname = __FILE__ . "/$fname";
-        $ffname =~ s/\n/\\n/g;
-        $ffname =~ s/"/\\042/g;
-        my $line = ($ffname =~ /[\"\n]/ ? "#line 1\n" :
+        $ffname =~ s/([\0\n\r\f"\\])/sprintf('\%03o',ord $1)/eg;
+#BEGIN COMMENT
+# \0 and \f seems to be ok, but for safety.
+# It is just sanitizing, not proper quoting.
+# $line treatment below is also for cowardliness.
+#END COMMENT
+        my $line = ($ffname =~ /[\0\n\r\f\"]/ ? "#line 1\n" :
                     "#line 1 \"$ffname\"\n");
 	return \($line), $fh;
     }
