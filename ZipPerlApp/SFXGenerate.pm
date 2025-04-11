@@ -782,7 +782,12 @@ sub provide {
     if (exists($source{$fname})) {
 	my $str = $source{$fname};
 	open my $fh, "<", \$str or fatal "string IO failed.";
-	return \("#line 1 " . __FILE__  . "/$fname\n"), $fh;
+        my $ffname = __FILE__ . "/$fname";
+        $ffname =~ s/\n/\\n/g;
+        $ffname =~ s/"/\\042/g;
+        my $line = ($ffname =~ /[\"\n]/ ? "#line 1\n" :
+                    "#line 1 \"$ffname\"\n");
+	return \($line), $fh;
     }
     return undef;
 }
