@@ -155,8 +155,8 @@ sub generate ($@) {
     my $progout_fh = $self->{progout_fh};
     my $diagout_fh = $self->{debug} && $self->{diagout_fh};
 
-    my %options = ( out => undef,
-		    main => undef,
+    my %options = ( # out => undef,
+		    # main => undef,
 		    compression => 0,
 		    base64 => 0,
 		    textarchive => 0,
@@ -165,10 +165,7 @@ sub generate ($@) {
 		    protect_pod => 2,
 		    inhibit_lib => 0, @_);
     die "ZipPerlApp::SFXGenerate::generate: bad keyword argument"
-      unless scalar keys %options == 9;
-
-    die "ZipPerlApp::SFXGenerate::generate: no mandatory keyword argument" unless
-      defined $options{out} and defined $options{main};
+      unless scalar keys %options == 9 || !exists $options{out} || !exists $options{main};
 
     my $zip = $self->{zip};
     my ($out, $main, $compression, $base64, $textarchive, $copy_pod, $quote_pod, $protect_pod, $inhibit_lib) =
@@ -781,9 +778,8 @@ sub provide {
     my ($self, $fname) = @_;
     if (exists($source{$fname})) {
 	my $str = $source{$fname};
-	open my $fh, "<", \$str or fatal "string IO failed.";
         $INC{$fname} = __FILE__ . "/$fname";
-	return $fh;
+        return \$str;
     }
     return undef;
 }
