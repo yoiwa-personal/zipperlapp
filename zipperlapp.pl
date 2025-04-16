@@ -451,6 +451,11 @@ All files are decoded into the memory at the beginning of the program
 execution.  It is not wise to include unneeded files (especially large
 ones) into the archive.
 
+=item *
+
+If C<DATA> handle is used, the marker token shall be C<__DATA__>, not
+C<__END__>.  This is the defined behavior of Perl.
+
 =back
 
 =head1 IMPLEMENTATION
@@ -487,11 +492,11 @@ The pros and cons of C<zipperlapp> is the opposite: it can not
 generate interpreter-embedded executables, it does not support shared
 objects, and it does not support automatic searches of dependenty
 libraries.  But, it runs quite simply and efficiently: it depends on
-only the minimum numbers of core modules (even with I<no> binary
-modules when option C<-C0> or C<-T> is used), and it uses no temporary
-files and directories at all (on-memory store is used instead).  It is
-very beneficial for small, trusted scripts which value transparency
-and simplicity.
+only the minimum numbers of core modules (even with I<no> external
+binary libraries when option C<-C0> or C<-T> is used), and it uses no
+temporary files and directories at all (on-memory store is used
+instead).  It is very beneficial for small, trusted scripts which
+value transparency and simplicity.
 
 =head1 REFERENCE
 

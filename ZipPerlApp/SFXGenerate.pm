@@ -779,11 +779,9 @@ sub provide {
     if (exists($source{$fname})) {
 	my $str = $source{$fname};
         $INC{$fname} = __FILE__ . "/$fname";
+        return \$str if index($str, '__DATA__') == -1;
 	open my $fh, "<", \$str or fatal "string IO failed.";
-	return $fh;
-#BEGIN COMMENT
-        #return \$str; # breaks __DATA__
-#END COMMENT
+	return $fh; # __DATA__ requires a handle
     }
     return undef;
 }
