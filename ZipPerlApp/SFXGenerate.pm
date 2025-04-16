@@ -779,7 +779,11 @@ sub provide {
     if (exists($source{$fname})) {
 	my $str = $source{$fname};
         $INC{$fname} = __FILE__ . "/$fname";
-        return \$str;
+	open my $fh, "<", \$str or fatal "string IO failed.";
+	return $fh;
+#BEGIN COMMENT
+        #return \$str; # breaks __DATA__
+#END COMMENT
     }
     return undef;
 }
