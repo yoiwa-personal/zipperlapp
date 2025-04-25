@@ -141,6 +141,7 @@ ZipPerlApp::SFXGenerate->zipperlapp
   );
 exit(0);
 
+=encoding utf-8
 
 =head1 NAME
 
@@ -479,14 +480,14 @@ distributions as of version 5.24.1.
 
 C<PAR> is a "Perl Archive Toolkit" containing a similar tool, "C<pp>"
 - PAR Packager.  It can be used to generate a standalone executable
-from several perl files.  C<PAR> provides very richer functionality
-compared to this tool: embedding binary shared objects, embedding even
+from several perl files.  C<PAR> provides much richer functionality
+compared to this tool: embedding binary shared objects, even embedding
 Perl interpreter, etc.  At the same time, the behavior of a
 C<PAR>-generated executable is quite complex: it uses temporary
-directories and file caches, it depends on large non-core modules, and
-it loads a lot of additional modules in start-up.  It introduces a
-potential security attack risks, especially with scripts running with
-elevated privileges e.g. with C<sudo>.
+directories and file caches, it depends on large number of non-core
+modules, and it loads a lot of additional modules at start-up.  These
+introduce potential security attack risks, especially with scripts
+running with elevated privileges e.g. with C<sudo>.
 
 The pros and cons of C<zipperlapp> is the opposite: it can not
 generate interpreter-embedded executables, it does not support shared
@@ -498,7 +499,7 @@ temporary files and directories at all (on-memory store is used
 instead).  It is very beneficial for small, trusted scripts which
 value transparency and simplicity.
 
-=head1 REFERENCE
+=head1 REFERENCES
 
 L<Homepage|https://www.github.com/yoiwa-personal/zipperlapp>
 

@@ -214,13 +214,29 @@ sub generate ($@) {
 
     # initial try with minimal quotations
 
-    my ($headerdata, $zipdata) = $self->create_sfx($shebang, $main, $pod, $textarchive, $compression, $base64, 0, ($protect_pod == 1), $inhibit_lib);
+    my ($headerdata, $zipdata) = $self->create_sfx(shebang => $shebang,
+						   main => $main,
+						   pod => $pod,
+						   textarchive => $textarchive,
+						   compression => $compression,
+						   base64 => $base64,
+						   quote => 0,
+						   protect_pod => ($protect_pod == 1),
+						   inhibit_lib => $inhibit_lib);
 
     if ((($protect_pod == 2) || $quote_pod) && quote_required($zipdata)) {
 	# retry with quotations
 	print $diagout_fh "detected unquoted pods -- retry with quoting/protection enabled\n" if $self->{debug} && $diagout_fh;
 	$protect_pod = !$quote_pod;
-	($headerdata, $zipdata) = $self->create_sfx($shebang, $main, $pod, $textarchive, $compression, $base64, $quote_pod, !$quote_pod, $inhibit_lib);
+	($headerdata, $zipdata) = $self->create_sfx(shebang => $shebang,
+						    main => $main,
+						    pod => $pod,
+						    textarchive => $textarchive,
+						    compression => $compression,
+						    base64 => $base64,
+						    quote => $quote_pod,
+						    protect_pod => !$quote_pod,
+						    inhibit_lib => $inhibit_lib);
     }
 
     my ($out_fh, $out_fh_close);
@@ -254,7 +270,7 @@ of C<zipperlapp>.  See man or pod of C<zipperlapp> for details.
 
 The first argument is an array reference for filenames.
 
-The rest is a keyword-style arguments:
+The rest are keyword-style arguments:
 
 =over 4
 
@@ -533,9 +549,24 @@ sub cmd_add_dir ($$;$) {
 
 # low-level routines.   Not to be used directly, usually.
 
-sub create_sfx ($$$$$$$$$$) {
+sub create_sfx (@) {
     my __PACKAGE__ $self = shift;
-    my ($shebang, $main, $pod, $textarchive, $compression, $base64, $quote, $protect_pod, $inhibit_lib) = @_;
+
+    my %options = @_;
+    die "bad arguments" if scalar %options != 9; # all values mandatory
+    %options = ( shebang => undef,
+		 main => undef,
+		 pod => undef,
+		 textarchive => undef,
+		 compression => undef,
+		 base64 => undef,
+		 quote => undef,
+		 protect_pod => undef,
+		 inhibit_lib => undef, %options );
+    die "bad arguments" if scalar %options != 9;
+
+    my ($shebang, $main, $pod, $textarchive, $compression, $base64, $quote, $protect_pod, $inhibit_lib) =
+      @options{qw(shebang main pod textarchive compression base64 quote protect_pod inhibit_lib)};
 
     my $debug = $self->{debug};
     my $diagout_fh = $self->{diagout_fh};
@@ -778,7 +809,7 @@ sub provide {
     my ($self, $fname) = @_;
     if (exists($source{$fname})) {
 	my $str = $source{$fname};
-        $INC{$fname} = __FILE__ . "/$fname";
+        $INC{$fname} = __FILE__ . "/$fname"; # sets __FILE__
         return \$str if index($str, '__DATA__') == -1;
 	open my $fh, "<", \$str or fatal "string IO failed.";
 	return $fh; # __DATA__ requires a handle
