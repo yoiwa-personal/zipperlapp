@@ -22,7 +22,7 @@ command level.
 
 =cut
 
-use 5.024;
+use 5.026;
 use strict;
 use Fcntl; # for sysopen constants
 use File::Basename "basename";
@@ -692,19 +692,19 @@ sub script ($@) {
 
 sub script_body () { <<'EOS'; }
 # This script is packaged by zipperlapp
-use 5.024;
+use 5.026;
 no utf8;
 use strict;
 package @@PKGNAME@@;
 
-our %source;
-our @@CONFIG@@
+my %source;
+my @@CONFIG@@
 
-sub fatal {
+my sub fatal {
     @_ = ("error processing zipped script: @_"); goto &CORE::die; die @_
 }
 
-sub read_data {
+my sub read_data {
     my $len = $_[0];
     return '' if $len == 0;
     my $dat;
@@ -713,7 +713,7 @@ sub read_data {
     return $dat;
 }
 
-sub prepare {
+my sub prepare {
     use bytes;
 #BEGIN QUOTE
     if (my $quote = $CONFIG{dequote}) {
@@ -805,7 +805,7 @@ sub prepare {
     close DATA;
 }
 
-sub provide {
+my sub provide {
     my ($self, $fname) = @_;
     if (exists($source{$fname})) {
 	my $str = $source{$fname};
@@ -827,7 +827,7 @@ $source{'lib.pm'} = "package lib; sub import { } 1;" if $CONFIG{inhibit_lib};
 #BEGIN MAIN
 package main {
     my $main = $CONFIG{main};
-    @@PKGNAME@@::fatal "missing main module in archive" unless exists $@@PKGNAME@@::source{$main};
+    fatal "missing main module in archive" unless exists $source{$main};
     do $main;
     die $@ if $@;
 }
