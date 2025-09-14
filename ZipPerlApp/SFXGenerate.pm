@@ -165,7 +165,7 @@ sub generate ($@) {
 		    protect_pod => 2,
 		    inhibit_lib => 0, @_);
     die "ZipPerlApp::SFXGenerate::generate: bad keyword argument"
-      unless scalar keys %options == 9 || !exists $options{out} || !exists $options{main};
+      unless scalar keys %options == 9 && exists $options{out} && exists $options{main};
 
     my $zip = $self->{zip};
     my ($out, $main, $compression, $base64, $textarchive, $copy_pod, $quote_pod, $protect_pod, $inhibit_lib) =
