@@ -352,6 +352,7 @@ sub zipperlapp ($@) {
     my $out = $options{out};
     my $mainopt = $options{mainopt};
     my @includedir = @{$options{includedir}};
+    $self->{includedir} = \@includedir;
     my $searchincludedir = $options{searchincludedir};
     $self->{trimlibname} = my $trimlibname = $options{trimlibname};
 
