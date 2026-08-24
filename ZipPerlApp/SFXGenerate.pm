@@ -97,12 +97,12 @@ sub new ($@) {
     return $self;
 }
 
-=head2 add_entry(entry_name, real_name)
+=head2 add_entry(entry_name[, real_name])
 
 adds a file to the self-executable archive.
 
-If two file names are passed, these will be used as a
-name for zip entry, and name of the file to read.
+If two file names are passed, the first one will be used as a name for
+zip entry, and the second as a name of the file to read.
 
 See C<ZipTiny::add_entry> for other argument patterns.
 
@@ -171,7 +171,7 @@ sub generate ($@) {
     my ($out, $main, $compression, $base64, $textarchive, $copy_pod, $quote_pod, $protect_pod, $inhibit_lib) =
       @options{qw(out main compression base64 textarchive copy_pod quote_pod protect_pod inhibit_lib)};
 
-    if (! $zip->include_q($main)) {
+    if (! $zip->include_p($main)) {
 	die "no main file $main will be contained in archive";
     }
 
@@ -512,7 +512,7 @@ sub cmd_add_file ($$;$) {
     my ($fname, $ename) = $self->canonicalize_filename($fname, $fixedprefix);
     die "cannot find $fname: $!" unless -e $fname;
     die "$fname is not a plain file" unless -f $fname;
-    if ($zip->include_q($ename)) {
+    if ($zip->include_p($ename)) {
 	my $ent = $zip->find_entry($ename);
 	if ($fname ne $ent->source) {
 	    die "duplicated files: $fname and ${\ ($ent->source)} will be same name in the archive";

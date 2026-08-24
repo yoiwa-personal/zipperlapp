@@ -409,7 +409,7 @@ sub add_entries ($@) {
     return $self;
 }
 
-=head3 Method include_q(entry_name)
+=head3 Method include_p(entry_name)
 
 returns true if the file entry_name is already added to the archive.
 
@@ -425,7 +425,7 @@ Modifying the list will have no effect to the generated archive.
 
 =cut
 
-sub include_q ($$) {
+sub include_p ($$) {
     my __PACKAGE__ $self = shift;
     my ($f) = @_;
     return exists $self->{entries_hash}->{$f};
