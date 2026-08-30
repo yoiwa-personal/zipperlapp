@@ -1,0 +1,26 @@
+name: Build and Draft Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Build with Make
+        run: make
+
+      - name: Create Draft Release
+        uses: softprops/action-gh-release@v3
+        with:
+          draft: true
+          files: zipperlapp
+          generate_release_notes: true

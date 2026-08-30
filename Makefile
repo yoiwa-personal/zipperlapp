@@ -10,6 +10,9 @@ zipperlapp: zipperlapp.pl ZipPerlApp/SFXGenerate.pm ZipPerlApp/ZipTiny.pm
 	./zipperlapp $(ZIPPERLAPPOPT) -o $@ $^
 	./zipperlapp $(ZIPPERLAPPOPT) -o $@ $^
 
+release: zipperlapp
+	git tag v$$(./zipperlapp --version)
+
 # running three-time bootstrap as a test
 #  1st to generate the packed binary
 #  2nd to check whether the original script emits correct outputs

@@ -45,7 +45,7 @@ use if (! scalar %ZipPerlApp::), lib => $FindBin::Bin;
 
 use ZipPerlApp::SFXGenerate;
 
-our $VERSION = "2.1.0";
+our $VERSION = "2.2.0";
 
 our $debug = 0;
 
@@ -85,6 +85,7 @@ GetOptions(
 	   'random-seed=i' => sub { srand $_[1] },
 	   'debug:+' => \$debug,
 
+	   'version' => sub { print "$VERSION"; exit 0; },
 	   'help' => sub { pod2usage(1) }) or do { pod2usage(2); exit 1 };
 
 if (!!$quote_pod + !!$base64 >= 2) {
