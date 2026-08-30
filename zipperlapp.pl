@@ -45,7 +45,7 @@ use if (! scalar %ZipPerlApp::), lib => $FindBin::Bin;
 
 use ZipPerlApp::SFXGenerate;
 
-our $VERSION = "2.2.0";
+our $VERSION = "2.2.1";
 
 our $debug = 0;
 

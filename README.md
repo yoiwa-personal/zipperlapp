@@ -13,15 +13,18 @@ the `@INC` variable.
 
 Run `zipperlapp --help` or `perldoc zipperlapp` for usage.
 
-## Content of the source package / Git repository
+## Content of the GitHub repository
 
-The script `zipperlapp` is a standalone portable binary Perl script
-packed by this tool itself.  Its source code is `zipperlapp.pl`.  See
-`Makefile` for how to regenerate the packed file.
+The standalone portable script, processed by `zipperlapp` itself, is
+now available from [direct link](https://github.com/yoiwa-personal/zipperlapp/releases/latest/download/zipperlapp) 
+or via [Releases](https://github.com/yoiwa-personal/zipperlapp/releases).
+
+To regenerate it from source, See `Makefile` for steps.
+Its source code is `zipperlapp.pl`.
 
 ## AUTHOR/COPYRIGHT
 
-Copyright 2019-2025 Yutaka OIWA <yutaka@oiwa.jp>.
+Copyright 2019-2026 Yutaka OIWA <yutaka@oiwa.jp>.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.

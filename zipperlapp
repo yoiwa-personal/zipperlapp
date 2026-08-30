@@ -1,596 +1,0 @@
-#!/usr/bin/perl
-# zipperlapp - Make an executable perl script bundle using zip archive
-#
-# https://github.com/yoiwa-personal/zipperlapp/
-#
-# Copyright 2019-2025 Yutaka OIWA <yutaka@oiwa.jp>.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-# As a special exception to the Apache License, outputs of this
-# software, which contain a code snippet copied from this software, may
-# be used and distributed under terms of your choice, so long as the
-# sole purpose of these works is not redistributing the code snippet,
-# this software, or modified works of those.  The "AS-IS BASIS" clause
-# above still applies in these cases.
-
-# This script is packaged by zipperlapp
-use 5.026;
-no utf8;
-use strict;
-package ZipPerlApp::__ARCHIVED__;
-
-my %source;
-my %CONFIG = (
-            "dequote" => 0,
-            "main" => "zipperlapp.pl",
-            "sizelimit" => 67108864
-          );
-
-
-my sub fatal {
-    @_ = ("error processing zipped script: @_"); goto &CORE::die; die @_
-}
-
-my sub read_data {
-    my $len = $_[0];
-    return '' if $len == 0;
-    my $dat;
-    read(DATA, $dat, $len);
-    fatal "data truncated" if length($dat) != $len;
-    return $dat;
-}
-
-my sub prepare {
-    use bytes;
-
-    for(;;) {
-	my $hdr = read_data(4);
-        # This function assumes a "correct" zip archive,
-        # using per-file headers instead of the central directory.
-	if ($hdr eq "PK\3\4") {
-	    # per_file zip header
-	    my (undef, $flags, $comp, undef, undef, $crc,
-                $csize, $size, $fnamelen, $extlen) =
-                unpack("vvvvvVVVvv", read_data(26));
-	    my $fname = read_data($fnamelen);
-	    my $ext = read_data($extlen);
-	    fatal "$fname: unsupported: deferred length" if ($flags & 0x8 != 0);
-            fatal "$fname: unsuppprted: 64bit record" if $size == 0xffffffff;
-            fatal "$fname: too big data (u:$size)" if $size > $CONFIG{sizelimit};
-            fatal "$fname: too big data (c:$csize)" if $csize > $CONFIG{sizelimit};
-	    my $dat = read_data($csize);
-	    if ($comp == 0) {
-		fatal "$fname: malformed data: bad length" if $csize != $size;
-	    } elsif ($comp == 8) {
-                require Compress::Raw::Zlib;
-                my $i = new Compress::Raw::Zlib::Inflate(-WindowBits => - &Compress::Raw::Zlib::MAX_WBITS,
-                                                         -Bufsize => $size, -LimitOutput => 1, -CRC32 => 1) or die;
-		my $buf = '';
-                my $r = $i->inflate($dat, $buf, 1);
-                fatal "$fname: Inflate failed: error $r" if $r != &Compress::Raw::Zlib::Z_STREAM_END;
-		fatal "$fname: Inflate failed: length mismatch" if length($buf) != $size;
-		fatal "$fname: Inflate failed: crc mismatch" unless $i->crc32() == $crc;
-		$dat = $buf;
-	    } else {
-		fatal "$fname: unknown compression (type $comp)";
-	    }
-
-	    $source{$fname} = $dat;
-	    next;
-	} elsif ($hdr eq "PK\1\2") {
-	    last; # central directory found. exiting.
-	} elsif ($hdr eq "PK\5\6") {
-	    fatal "malformed or empty archive";
-	}
-	fatal "malformed data";
-    }
-    close DATA;
-}
-
-my sub provide {
-    my ($self, $fname) = @_;
-    if (exists($source{$fname})) {
-	my $str = $source{$fname};
-        $INC{$fname} = __FILE__ . "/$fname"; # sets __FILE__
-        return \$str if index($str, '__DATA__') == -1;
-	open my $fh, "<", \$str or fatal "string IO failed.";
-	return $fh; # __DATA__ requires a handle
-    }
-    return undef;
-}
-
-prepare();
-unshift @INC, \&provide;
-
-package main {
-    my $main = $CONFIG{main};
-    fatal "missing main module in archive" unless exists $source{$main};
-    do $main;
-    die $@ if $@;
-}
-
-=encoding utf-8
-
-=head1 NAME
-
-zipperlapp - Make an executable perl script bundle using zip archive
-
-=head1 SYNOPSIS
-
-  zipperlapp [options] {directory | file ...}
-
-  Options:
-    --main              -m module    specify main entry module
-    --output=file       -o file      output file
-
-    --includedir        -I           locations to find input files
-    --[no-]search-includedir         search files from -I library directories
-    --[no-]trim-includedir           trim -I library paths from names
-
-    --compress[={0-9}]  -C[{0-9}]    apply compression
-    --bzip                           apply Bzip2 compression
-    --base64            -B           encode with BASE64
-    --text-archive      -T           use text-based archive format
-
-    --copy-pod          -p           copy pod from main module
-    --[no-]protect-pod               hide unwanted pods from processors
-    --quote-pod                      quote pods in archive (zip incompatible)
-
-    --inhibit-use-lib                disable 'use lib' pragma
-    --random-seed=...                specify random seed
-
-    --help                           show help
-
-=head1 DESCRIPTION
-
-This program bundles several Perl module files and wraps them as an
-"executable" zip archive.  An output file can be invoked as a Perl
-script, or (if a source file contains a C<"#!"> line) as a directly
-executable command.  Also, it can be handled by (almost every) zip
-archiver as an "sfx" file.
-
-Inside Perl scripts, all files contained in the archive is put in the
-top of the searched library set.  The program can simply use C<use> or
-C<require> statements to load the contained modules, without modifying
-the C<@INC> variable.
-
-=head1 ARGUMENTS
-
-=over 8
-
-=item B<directory>
-
-If there are only one argument and it is a name of directory, All
-C<*.pl>/C<*.pm> files under that directory (recursively) are included.
-The directory name itself is truncated.
-
-=item B<files>
-
-Otherwise, all files specified in the argument are included.
-
-=back
-
-=head1 OPTIONS
-
-=head2 INPUT/OUTPUT OPTIONS
-
-=over 8
-
-=item B<--main, -m>
-
-specifies the main module which is automatically "require"-d.  Also, a
-"she-bang" line and continuous comment lines at the top of main module
-are copied to the output.
-
-If one and only one script with extension C<'.pl'> is contained in the
-input set of modules, it is automatically detected.  Otherwise, the
-main module must be explicitly specified.
-
-=item B<--includedir, -I>
-
-specifies the locations to search input files, in addition to the current
-directory.
-If this option is specified multiple times, the files will be searched
-in order of the specifications.
-
-This option will have two kinds of separate effects; when C<'-Ilib File.pm'>
-is speficied in the command line, as an example:
-
-=over 2
-
-=item *
-
-The command will include C<'lib/File.pm'> to the archive, if C<'File.pm'>
-does not exist.  This behavior can be disabled by specifing
-C<'--no-search-includedir'>.
-
-=item *
-
-The file C<'lib/File.pm'> will be included to the archive as C<'File.pm'>,
-triming the library part of the name. This happens either when the file is
-speficied explicitly or through C<-I> option.
-This behavior can be disabled by specifing
-C<'--no-trim-includedir'>.
-
-If two or more files will share the same name after this triming,
-it will be rejected as an error.
-
-=back
-
-=item B<--output, -o>
-
-specifies the name of the output file.
-
-If omitted, either the name of the source directory or the base name
-of the main module is taken, with a postfix C<'.plz'> is appended.
-
-It is always better and safer to specify the output file.
-
-A single hyphen (C<->) will let output go to the standard output.
-
-=back
-
-=head2 ARCHIVE OPTIONS
-
-=over 8
-
-=item B<--compress>, B<-C>
-
-specifies the compression level for the Deflate algorithm.
-
-If C<-C> is specified without a digit, the highest level 9 is set.
-
-If not specified at all, the files are not compressed.
-It makes the content of the script almost transparently visible.
-Also, the script will not load zlib and other libraries run-time.
-
-Outputs generated without C<-C> options will not contain decompression
-functionality, that means you need to add C<-0> or similar options
-when you modify the contents with zip archivers.
-
-=item B<--bzip>
-
-specifies to use BZIP2 algorithm for compression.
-
-This compression method is not common, but it was implemented around
-2003 (PKzip 4.6) to 2006 (Infozip 3.0f18), and most current
-implementation of zip archive supports bzip2 compression.
-
-=item B<--base64, -B>
-
-It will encode the embedded ZIP archive with Base64 encoding.  It
-makes the script about 40% larger and also loses zip-transparent
-behavior as an sfx file, in trade for making the output script
-completely ASCII-clean.
-
-=item B<--text-archive, -T>
-
-It will use its own plaintext archive format for storing modules.
-The output will not be compatible with zip archivers.
-
-Output scripts generated with this option will be plaintext, if all
-input modules are plaintext in ASCII or some specific ASCII-compatible
-encoding.  In addition to that, it is easier to modify its content by
-hand, because the format uses no byte-oriented structure.
-
-This format will be useful when (1) you need to edit module sources
-embedded in outputs by text editors, or (2) when the whole source code
-must be transparently visible for auditing or inspections (if even
-C<-C0> is unsatisfactory).
-
-The combination with the C<-B> option is possible but not very
-meaningful.
-
-=back
-
-=head2 POD HANDLING OPTIONS
-
-=over 8
-
-=item B<--copy-pod, -p>
-
-If specified, it will copy all POD (Perl's plain old document format)
-sections in the main module to the output script.
-This option is requored when the script uses the POD data of itself
-e.g. by C<Pod::Usage>.
-
-Alternatively, when compression (-C) is not used, it is likely that
-any pod-using modules may see pod sections from all of embedded
-modules within the zip file structure.  If only your main module
-contains a pod, you may be possibly depend on that "behavior" and not
-using this option, although it is not a reliable behavior.
-
-=item B<--protect-pod>
-
-specifies to protect any POD data inside the zip archive from being
-processed.
-
-Unless either compression (-C) or Base64 encoding (-B) is used, POD
-sections in the original source scripts within the zip archive may be
-visible to POD data processors; it may either be or not be a good
-thing, depending on the situation.
-
-If C<--protect-pod> is specified, a small POD is inserted to the output
-so that most pod processors will skip such ghost of PODs.
-
-This option is automatically enabled, when C<--copy-pod> is used and
-a POD directive is actually contained in the archive binary.
-If the process is not wanted, you can specify C<--no-protect-pod>.
-
-=item B<--quote-pod>
-
-It will tweak the embedded ZIP archive so that the encoded script will
-not contain any active pod specification.  The tweak is performed only
-when it is really required, but if done, the output will loose
-zip-transparency.
-
-In most circumstances, either C<--protect-pod> or C<-C> is enough, or
-when zip-transparency is not needed, C<--base64> is more reliable option.
-
-=back
-
-=head2 OTHER OPTIONS
-
-=over 8
-
-=item B<--random-seed>
-
-specifies a seed integer for pseudorandom number generators.  Some
-features (e.g. C<--text-archive> or C<--protect-pod>) use random
-numbers to generate unique byte sequences in the archive.  This makes
-output archives for the same set of inputs to differ time-to-time.
-Specifying a random seed will make output somewhat deterministic.
-However, it is not a strong guarantee; the output may still differ by
-small change of inputs or even small environmental changes such as use
-of different machines or system library updates.  Main expected use of
-this option is to put the archive outputs to version control systems
-such as git or subversion, making differences as small as possible.
-
-In Perl, the seed will be an 32-bit integer.
-
-=item B<--inhibit-use-lib>
-
-An experimental option:  it will nullify effect of C<'use lib ...'>,
-so that local files not included in the archive will not be read.
-It will break if any system library uses C<'lib'> pragma, thus
-use of the snippet in the APIS section is recommended.
-
-=back
-
-=head1 APIS
-
-There are currently no APIs visible to user scripts except import
-hooks.  The package C<ZipPerlApp> is provided in the zipped script, so
-if you need to change some behavior upon packaging, something like
-
-    use FindBin;
-    use if (! scalar %ZipPerlApp::), lib => $FindBin::Bin;
-
-or
-
-    BEGIN {
-        if (! scalar %ZipPerlApp::) {
-            require FindBin;
-            require lib;
-            lib->import($FindBin::Bin);
-        }
-    }
-
-can be used.  For a main entry script,
-
-    use FindBin;
-    use if (__FILE__ eq $0), lib => $FindBin::Bin;
-
-also works.
-
-=head1 LIMITATIONS
-
-=over 2
-
-=item *
-
-Only pure Perl scripts or modules can be loaded from zip archives. For
-example, autoloading (*.al) or dynamic loading (*.so, *.dll) will not
-be available.
-
-=item *
-
-C<__FILE__> tokens in the archived file will have virtual values of
-C<"I<archivename>/I<modulename>">, which does not exist in the real
-file system.  This also holds for the "main script" to be referred to.
-It means that the common technique for making a "dual-use"
-module/script
-
-    if (__FILE__ eq $0)
-
-will not work.  Instead, please provide a short entry script as a main
-script.
-
-=item *
-
-For compactness (and minimal dependency only to core modules), an
-embedded parser for zip archives is extremely simple.  It can not
-parse archives with any advanced features or partially-broken
-archives.  If you modify the packed archive using usual zip archivers,
-be aware of that.
-
-=item *
-
-All files are decoded into the memory at the beginning of the program
-execution.  It is not wise to include unneeded files (especially large
-ones) into the archive.
-
-=item *
-
-If C<DATA> handle is used, the marker token shall be C<__DATA__>, not
-C<__END__>.  This is the defined behavior of Perl.
-
-=back
-
-=head1 IMPLEMENTATION
-
-A zip archive of module files are stored in the C<__DATA__> section.
-A minimal parser for Zip archive format is embedded to the beginning
-of the output script, and it will extract the source codes of all
-modules to an on-memory storage at the start-up.  An import hook
-subroutine is put into Perl's C<@INC> facility to load those modules
-by C<require> or C<use>.
-
-This enables use of C<__DATA__> sections in each included module.
-
-=head1 DEPENDENCIES
-
-Zipped scripts generated by this command will not depend on any
-external modules, except those included in the Core modules of Perl
-distributions as of version 5.24.1.
-
-=head1 COMPARISON
-
-C<PAR> is a "Perl Archive Toolkit" containing a similar tool, "C<pp>"
-- PAR Packager.  It can be used to generate a standalone executable
-from several perl files.  C<PAR> provides much richer functionality
-compared to this tool: embedding binary shared objects, even embedding
-Perl interpreter, etc.  At the same time, the behavior of a
-C<PAR>-generated executable is quite complex: it uses temporary
-directories and file caches, it depends on large number of non-core
-modules, and it loads a lot of additional modules at start-up.  These
-introduce potential security attack risks, especially with scripts
-running with elevated privileges e.g. with C<sudo>.
-
-The pros and cons of C<zipperlapp> is the opposite: it can not
-generate interpreter-embedded executables, it does not support shared
-objects, and it does not support automatic searches of dependenty
-libraries.  But, it runs quite simply and efficiently: it depends on
-only the minimum numbers of core modules (even with I<no> external
-binary libraries when option C<-C0> or C<-T> is used), and it uses no
-temporary files and directories at all (on-memory store is used
-instead).  It is very beneficial for small, trusted scripts which
-value transparency and simplicity.
-
-=head1 REFERENCES
-
-L<Homepage|https://www.github.com/yoiwa-personal/zipperlapp>
-
-L<Python's "zipapp" implementation|https://docs.python.org/en/3/library/zipapp.html>
-
-=head1 AUTHOR/COPYRIGHT
-
-Copyright 2019-2025 Yutaka OIWA <yutaka@oiwa.jp>.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-L<http://www.apache.org/licenses/LICENSE-2.0>
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
-As a special exception to the Apache License, outputs of this
-software, which contain a code snippet copied from this software, may
-be used and distributed under terms of your choice, so long as the
-sole purpose of these works is not redistributing the code snippet,
-this software, or modified works of those.  The "AS-IS BASIS" clause
-above still applies in these cases.
-
-(In short, you can freely use this software to package YOUR software
-and the Apache License will not apply for YOURS.)
-
-=cut
-
-
-package ZipPerlApp::__ARCHIVED__;
-__DATA__
-PK   ï]My[k1  FB     zipperlapp.pl­[mwE²ş¼ó+Á^Û¬$;&pÇÖAQ¢³‰íc;pprZRKšõhFÌ‹Arû}êî™9î’| k¦_ª«ªŸzªºçÓOö«"ßŸÄéşÚäIô©ú5^ó/½^«z¡oŒÒ©2oÌ´*õ$1Š/U1Íãu©&U:Ã£ªˆÓ;*O—ñ­‰>Å@Ë²\Gûû‹¸\V“ş4[ío²øN÷0B‘¥:Ùo¦Ú—£l½ÉãÅ²T‡¾î~©~À´7Z¿ªãüø†£ôÿ½ô¥×óxjÒÂÌ„1¹*—F×zŠÿ¹7]õfŒ³TöÔ.tÜ«ÎŞ#Œ°É*µÒ•f%Öb0D\¨yŒ•™7SƒuÆ©‚øë$ÖéÔ¨;,H¦qƒ@õƒ"›”­5Ú¯ñk¶SºùÊnîîîúZ„ígùb?±‹ıçãÑéÙÕiK——ibŠBåæ—*Î±ÔÉFAkh.&IôÊr¥¹Á»2£¼wy\Â*]UdóòNç°‰šÅE™Ç“ªl)ËK‡5‡ .¾3¼Rã«z<¼_u1Æ÷ãëgç/¯Õ÷ÃËËáÙõøôJ_ªÑùÙ“ñõøü¿ªáÙê_ã³']e *LcŞ¬sÊ!cªÑÌ¨³+cZÌ3+P±6ÓxO±®tQé…Q‹ìÖä)ş²Š³€x3Œ’Ä«¸Ô¥<¹·(ë!C´µ£êÄ™”Ş E½ÏY²ª\WeaèïUØUwËxº„mÓÚÊ3È›ÒKš+Só<[YjúÁ50Î„[- øûl¥É¬pÇ\M—¢ùT’aáº °"7a•¯3¨Ì:ş¸Ëò›‚&¤ÃCüèÔ
-J3nÉÍ¯²”iìP22¦è+uÍ3¼ê¯¬tÔ4ÑX†ÑXFeœ$Ö!MAç³2M5\¹EÜR_ö>’?)Ù´´?¦eòH}*¶/6E¶6ÜjiQê´,lìÃ££Ç+Õ+2qu¯ŸÆPéî}ôD—úèèIµ‚³Ô¿5e¶.S™¿Üía–y‡ÊŠøÍë™™ë*q€æı¶AçèSv¿ÈfGG/8ã£¨¨&è6;¬øSıq?»ÙjÇç‹^ö_ÍÓ££ºç£èÕºíìZïPV;É[¼4½,M
-éÂ®jÏˆ¶¯R¸S9]FnıéìqœÚEÆsµû	ÀY':Wÿ1^_ ^‡ëõÑÑ^e¢Nê3×:e7é¶¼zú?ßšÔäº„„]ñ³ïN/¯°·Õ‰êöIÿbf&Õğ`µQŸ$¹Ñ¹»ä)N óï}†tş¹}°Â¦‚‘Ú	¤¯¡´¦ß/UVšö£uGÓÒ=<´Kó¦t)îóÕÃæ7Ô½‚fÄ·NÔû°0Ò/&Õ{)¯ß|ÓzFßbó8]Æ“¸|-æÀ¢œ"şÕ8±÷ÁÃ~ùß_©ÏÕWØœñ\0¨Øş/Ùñúy;:úz‡Vzê²kQ‘îå–N]‹\o³“Â5Ã÷Šª}»ª_8MwıìëMª{»ş¤Ü*İ5³…_›À5pú›&ñò‹êß>ökŸîmÕsÆz{íZìF¶]£ÿ·ã#·šÀ(n4k¿^óÜµmX?;œà=­ßhæS÷°kzxåàÖÖ?‰ıÜş‰›4GÈV½1Ûµ!°ü¦
-¾PŸ½şéÁÏêk+íèn$ùå'ºµÜ&`Çi©:~Ûv!æÁÕÃ-M²;xHÚ}°§Şí1Ì²ÖóÃ=7Èõş+8óI°ÿ¡ğÓm­6àƒE+ÊÕõ“ÓËKÕ9Íó,?R½^Ó‘Kíõ\O„"†ç|òÖ¼J;B[R 3İä!¤Øé·pæOÈ6w’Xûgä¨,'Ûm£ŞÿªıWÃŸz_ÿüöÇÉ«_÷W‚‰Rœ´FÚ-–Y•ÌHHU¾Şû€¢VWó‹Úù¾ùöí=ôõâlAµÅ–z´o†—ß~§N€e¾=Ÿ’ãÁ£ßı­J‹e</•téBÿÒ
-ûN™¤`ü[[lyÇéz/ U¯çKˆòês(	Ó¹™D	.¨·ó~UZĞ#õ)Ê~Ôörñ¥OŞŸ£ÈÂ?{ƒ&MÁ»æ•]-ÿ”IÊB-~×1l ”Åó–¾ªïxïãÒ@ÕÀˆ§­6PmD”Q}p¨ ´EIAD¨6ã}D*Äs;rÛøŠ×÷£ã@½Y)~\ª¨©	‘¤]@m¨Ah7'brªÀxï˜ÉÀq<‚ÓÁvÈéNL
-FL¢W•óŞ?ñ`iôì:¾8¢’û!¯~8;¿ k C0ğO™% ?«ß -X&Ë7ê­Í:ûış;6wáH<·×£;©Ö¿ŞŠ´½B*SÒ¦x kÄxö¥ën7Ê‰ÌàºgªùåöD®G`bßcÌdS—w•ø§~ˆÂñSšõ~¾ë!ìÛÃ&N˜6Ì5¤÷z‰Û£më@ ¾	Xëré†¥Ë~]~ïıtò€úİÏx6úÉÿ©$‘Ù„Öu“Øğá¶Ûc4:|_g»¿Cã=~ˆ?ºÒ’¬Ó¯º~!1rı®ƒ~R®`?óÎÇt
-9B³^Ëï‚¹Ã…H©‚¯ESâ>-Ç­okİË‚Wéf¢ÂqœÊÑc
-d¹·^Í"ß¯?ymû3·v+Ù¥Òam(Î†İ·×xg‹Šm‡X6ëU$TmëÅJ»Ş!ûÂ~Ûîí7“m¦ØÌÏKòô;n€°}§Ø¦F€'§W£ËñË#QtÍÄ›`–ë•D.§Åøãw´İd%w¹^Kö¿b@§Q§Á¢Nˆ9XÅ072Rğ”"No³º!œ$²è%‰ÿ.Â¬Vr–©q½l}ƒGÇO?é ÀÔìÙşv[&›(@D˜gQ)@Rd]DwS/5—(«]¬²Ñ‹İìQğÈ	Û…©N1ÓúQ4NzÖE¶EWé$qšqBš™+8ÔCıV¥{!ë÷e86èàñ¡0¥+oxƒPè‚%ªì¬Ñ1ş;€’¢Ñ±ËğÁ™K°‚ Vp/ÉÀál…ÅËca¹›É¤´²A€ˆØptüÍøl4P·:©¼~í( /_œ]#Vœ°â¥˜bL¦×Ab ÍÈzr#D5K!l–òÇ¢¢Xâ3±0"-¸Çõ×İ»°P‚å|Ş_'ƒ}ùÿjàTêËgºlÚ«]üQådÂ	ŒÆ=öö#ª®i)sÅea’9'/ó*E€`»z2VpNùïb–Û‹ºº_hQ¿¢Ö¬ÑÉDOoj­ËÎºr¿Õøìâåõ>ş¼ÜV¨§]ÄPÈã§–mB «øQ—U™Sã)Ş¨s‡N¯qzuŠ¥§‹l±ı"N«¬*d—p9|‡K™Ì9h»\®+&º¥İÓ}1}æ®ï˜ˆÄ„“
-ÉïÀÄ;Ê¾½W"¨áÿ2µ÷Wç4­…Îaßp•Ñ8F¨¥U…}=aÖÄ¢tÌúUmÍ~¨ó€ "RßÓ|‹R8rŠ®D†Ù,ë·ğÎZjGìÛ‚¥X%¹Aí[«*)ã5d.ãGäÖÿîXÅœ48-aësKx q…i+bß¹›Dz/5 ¨¼ËÔèQ³ÖL#”™Ï!^ñeÄ:½1£ë—Ø‚;ƒÈJ‰áƒàpU<¦ë@Ò¼Ñ (sä}úĞë÷óH6¤ï#9}s>Ì¶_Ïæ•ç“	&xhÓH3ËŒ-&ƒ4&!àÄ`…1‚†CwdŞv€r\\¤áïÛô·„•xsO8o	ßsKZ*"¶‘ùùRwÃşòÒ[ĞÔ·KX‚§a‹ø£	±†÷xJÔØ pf9™È³j±ÄÄğ[gô~ôhe‹¿ŠNè°ğ)Ãç-,–Dñ>Â«`¬—‚Ó²²ğn—µÖróoÙ²Ş_XkP³Ş‹T°³{ûĞ‡{ê¨ BŠ&5i§ÂíJ4Áë¢JÃÈ5„kA¦•Ú¨‰ÈµU˜ÇoıjLlgƒÀØ‚Ur§7´@I•Ğí=§LYMáî¯a¨˜­aÒåfMóïÂ¦ƒ=«¿„˜h[/2ïw<˜é|Öàp‚¸GÏÆßşn´ñ)Á ËŸ£{*	(RRŸ‡=1ó„¢“’¡r¹²fq”6¶yÂA’¶@-İ—ñbi ÏvĞ¯¥‡q±„¼éˆÌ!‘¾Ç6^8jŠ_ÁREÍzÒ¼ém(rD¯{.°Ñ {è6.b¡;6ZÍEñœFÈÔ¯„E	pâ]v;SKà=‚6D?wgtW¤i–nµâ’ëfdd73aj6CaCÄå¦k™ÏÊ@h9Nİi*‡= $;Œyºâfˆ?ä YH^¨”Âºr@Ğó¢™P¶ı ÚùøÇñÅacnq„@lxBY,æ 2l¥	y0ô  ©Ö*Ybª|¡v/şEö¿Úãôxö•Ú§óŒO¿èÌüs¯+æ“ú`['±æ–©Šj½Îr(`²·×o]È„²ŸÅZ.¦Íjbf„è£Û¦È6›öU„§q5^éİpBxxğw‹->èDT4…p½ÀG£Ç-p"‘m ¬íföˆÓøPã€ÂNÉĞ%øúğj4÷¦	|©µâ0›Çº¯ƒuËùïRµNà«l»•ĞÛcR–D €£m–…;IjŸX@±)óûığ<~{+µø“,µXB G:I-Ñ¡4Qƒìšlœë;íÔòE¡·	.=15ºˆ-´»½Fuy šl"¦šğy3ÕöG­µª.Ó>RåIk5-«ÜøıäZûÕ¢×¼J,AàÁH	Ü~Ù.ÜQí­qZß! ]°}–6ß>ÜkXÇİ2«‡CúÈSé÷‚§8€®fr·C®S¤Ôª;&òÀø4"Hh¨Ò*.æZñ^¿fˆ“8ÕÎ¶î2:=Œñ×NI¡K1kˆ˜Š¹/ÎŸ¨gÃ³'ÏÇgßşA$´å(l€µÍfë$¦HQŠ¹!‡İe`§°Î¥²d¦fÙÔ¦†Öh{Qáµà˜sÈ-ZI”sø~‹¼ÇönMÆ»5µmŠˆ÷ğ7%™éRílš™>|F7GüäsÃt„fÖÜµC¶wz£=Ö¼â]<‰oôúH§R•ëÙÒ²ßc¼dT©“©zÍRo£² ™wÃÈ÷ …RÂsßÇ›ÛTR®„ihPkùkRDëLIÈxYH‚gÇChG°Ë‹¬øœ0åg¬—¶‹¦4ôŸH9¤fÓ-àÊÛÓ½RÔWm¢Øü¢k¥¢&†tÜ•'…KºëUÏŞ3öÙVÀÁóÇb@k<L{Ï3l²Äon³[æğ’YÅF~Ÿc]õZšBê#jŒ-¤Nãñ^ƒ°f³ˆ£/ºÎ0‚Î›ã²Ò6iqì±¥Ô‘ì² ¸ò»/æš
-“—Ûõˆ¨Èg"5 G6¢ºìåK,*dñ‹%ÛÀ?1âvê|¯è`RÉŸº>Wn0cà•.·¿´U’$®ô¤«dŒÖ	}u‘Àx‘½#Ú2¶uv©º,‚B yUÖrĞº¸„ôòÎè›3¯=i ¬g2â(ä­tnm);?¬D¸¦Èmr¢¢±%"ËPíNË¨Æ_#tq4MmQ§Å#’,)j“¤éF*³Æ9P˜ÉÑ”•ç”÷<+Ë›\Å¤ÜøŒƒV®íÑ½h)à¨¦‰Ò]²ã)|¾ˆÎ¯Ÿ^şn
-Šÿ-4ÑRèW$0¤‹¶ëÂT³Ì¤ì˜{ª/‡ê¯@m¢¹ÑDSÄ`‰£-ªçuĞÒËP>;rdG<óDÁ;ş¥2ÂZ ş¤š·¼Ùf„ûFÎzî]ÑÜ¨dvîª}BÙd"p(I•‘RõÊÌ¥VWÖß	:<ı°.Áiê8Š…ßI­ØğêbœÆöo?z–İ±Âßm¡;/Ş-*sƒ™G¡·IL“;„N$9?Spº…	ÄÆ‚Hq:™ô6Æ¸’‡øÆ…Å-0Ié›c’+¬4O¨ŒRl
-zƒ/Uk@­¡=_Èñé›µ-¡TrÉ2Úª&2êTeU<ãÃ+w#Gön%nª"òr!3	ª‰kÙõ9…•vFC»Hİp1»÷H†\ş\f"gÔ_ö&Ôºõß­Âkë´n?´ËÌc§>»¼#US°´JBŸ­\Ò£cšÆ3jŞ<†±pëëø´x]¹Ûß0AÙr‚]A.ğ5¨Û¶)˜­îÜ95PÙ+¢¾øàîáº)‡ã+O‘,øÙúûûÎØV¸±;TqinÂ;á|Y¨ 0cÊ¼çş†øŠ	o´Ì²›ÂŸ)a^77KÄ ·q ¹à¡Ÿ7~yñ%Ì6Ü.$ªÎQ«5–eçp÷¼Y ‘DÚÃÊÖQÿà?¹$
-¸–şO¿Ÿ¹k8şZĞÆ
-Z…d[âl¿ÄìíxĞXİî¶dÚkÚ½s—‰"W}%;€	2S
-/C8ışf^¿~:~~úú5ï}vğaHA®J7çwÏÇ/Æ×ÃVØ	‹óçdÙë*oŸiº»×BÕİ
-XóÉÇÂ¢"Wÿï
-gbSá£Ÿ÷uboîmR½âåùæËmŸ÷gI²Wï¿ˆ€q«ãÄŸ@z!GÇ^<#¸1évÄ™Ù¢9î “r©[TÄÖ9ÆèŒ]sÖ{ûãc»DùÕø‹ôíC?YJdÓãDåÈ—gM`ëˆ}­&;Ü*+ÀĞ\v-VJA¯fZ¶6†´|º´ñ5¨éhÕ™a)ÉËŸö]q§¾·å QTC½A*Zƒ»ÀH¬x»íÎ ¸„·¼Ñ¨s‘OKS<ue?ğ¾TnJqaÁñ{¡L’½&Hœ+IÍ®)I€]Ğ„%ŒìM™›³N9ø–ŒĞŞÓM¤cÓŞÖæÉEg·d}pÏ|È•t^Æd˜½IN×‰Çe–¹U%%vWVlXt¥V©ª+¾z'gİs±c¨¤a}|Ì,ïZdu‰ÊÊ¬xál?1ÀJù$«É?ÏıİUË¥Ç5máY§ıœÆ¢U©¥¥nÂ]ã¾)î¤ÀF{Íä£âJæõdx=¸›Mi«ù”¸nÈq–ÚFvîIöÁìŠUøàôì	~û½Û…¿¢YG	&\ ›{oüââù)ïíµ”a+­…Õ²ìØÄ¬@$cûÄ{gào?†é·­°Ñë¼g:UÕ–‰Ú§N>(º;¶BÅÏšhu9neQÒ£)K÷)vGÏ9WÀ€ìœyK>´¶·flQàüÀ#ÏøíLp™„	¹-Bùûs=ynÜá'9nöHªBõ¥áÿ¼LâS_›â`¾OŸ¼FË	¸#Svì~p³ènpz6Ÿ^ÉÖ†G„]V!İAs2Loª7ØÓïä¬XÔ¹±Û¦t£ n¼ŸEÍ‡Gò…–¼ğ|øËşáÃşƒFúÑù‹‹áåøŠş7:ÆŸöˆOu$<Ï\gYrİ]*lqÚÃ”xÛUÑ1¸U'ê)Œ¢.,ñÊ$ó^…Ù•v§z	¯P4W™"‰ºşB–Üô”=€ÁœŒÏ‘s‘Ïçˆcôôğ$INtî½[†,9rNÏØ„=Ü…ş'<°¥¾™ÚÔ­"ÑÉ|¾Î™c¡A9¥»–MVÇ¬­ë¶P³çµSh¯q‚à¶‚[–öˆ 1o¸µl™Óp@´(¸|)›Ï]'ÃbíEë:}G°ÏçÆÓcQTû‘Û½Ü%4p’I6áëüÇqkÛòšŸ‘E1³¨Y5eåƒ¥~~ÄWğN÷.KXV(n¨¿%R¹­å•E}{E&1·¢‘ußbUL%k—·£ãùşÀUÊaëÂßâ)ì>mîğ<êfk~EVš#ï];Z`À^{5œ:=rGgÎ5¢Ú5œ
-ïµ«gşÚŠˆéÙ|±>?…BWö0úğ.àn»qxäy¼øÀ´ç¨mâÈR(|å+!2WH;éÂ¢Éñqš”•È¹|sœ+õ—S»[%¹®‹|{õºİNT;hp?²åªr„­vÛ¨_GY8“³½:ÎóT['•KÚºKŞİå¶¢ U8k$4WµjVrí@>lÂ'€»<}zz	t&8??~†m\zë?ŒæÇ¿æãè{_l€Â)ÂO/ğ°£ÚG°õ¨³lZô×ÒZ¾)6éşû.‘Ş·}ûËr•šä÷åõ³óËıÑùÅ—ãoŸ]ÿßbGõ+ì¿üöŸıûùñŸÿözPü¥/¯ÿúw×í«ëñÍõ|qıµÏ­?ÎÇÖáSëñ¡õGùÌúO}d½;Nm~Ù]Ìá”î"sK)_ºâÔç//G¥¶îÛ¨á‹öúû]õ‘ı ŒEÿPK   ‘
-]dtwƒÜ   Ûa     ZipPerlApp/SFXGenerate.pm­=û[ÛÆ²?ã¿b#Ü µ–4M[\ ©¿6¤i‹‰?Ù’mÈ’+ÉB¹û™}êIn/ßùy³³³³óÚÙ=›ì¯põ:H£ƒÕªÛ=ÿù—A¤^tÙœ…ñœ­Öiàb+–ÑÌn‚é:÷&QÀ¼tº?Y»±ÙØd¯½4gÉŒÙÓ$àÃaÃÕ
-úy«UJ¶»½ó£»»½ûû ¼÷Øéğítf¿…Ó ÎŸ­c?HÙÁÊ›.YÊ~Ò,Lb¶ÛŞÆÆçAÀÎ^·—>›%)óƒÜ£Œy±Ï<ßshíEÌ‹¢äÚ‹§ˆ`@¾÷æÁC3fvÛ;íí^£±¿J|øï"ğüvrğê¸ÑxJ¤ ˆ©pÊšä‘àÏÏ†¯/†§'ÆÅ"ÌØ2ñ×@Éi @˜£ŞÙ4W9»óËÂå
-Z -%@,'ï~«q½§6õb6	Ø)è!Z¨iYb(ÓKÖÆaƒ—.`ùu-ó-Œó y@«.[†¾#FÁ‡ bvNR/½å?¤qcš,—Hk*ÂÙôF†gßµ·wŸ÷è3ËÓpšóïŸ§qõØ&)»Í’U3À/Ë½8Ïx“0
-ºİ^ÄŞ2`ÖD|Y=£úçFµ^täå^·{´^ÉTáùÔ‹¼´Û}“‡/b¿(èqaŞ[Ìó¶ctË&·yà&i ü‹I„QÌ–^>]ğÎ!p÷xüóğ·ãñ˜³æ¶ÓbˆÔ‹0fû}…Em; $¶±š¢Ì6Œ;í¶%03¹¾/Âøj’uÊšGÇ/Ş¼dûùsss“½
-}—/Z7Åc¯ñj5¬»˜T¹-€ir¨%¸cpÏO#/ãûiä‹ÄÏ
-«<ƒÈÏØß×ö*É²øjœ¬s TÓòÛĞ Fk`Ò0e@å%Ì—³Á
-Yø1ˆÂe˜Ã¬ç'oš#—û¡7°ãÙ‚­ÒD~Â>pzb²»ÌØn?®íË÷×>Rùƒ­ƒk·ÛWN£q¸u}c—ÁOÙop¦,Š¶Lol˜ù0¯!Ñûàö:IaÃ¥óõø&ë6j:(fÀt4AÆgˆÃ Øh+C‡ô¶Å·,VL’|Ñ0„.’>]Ç1~çá2 ê3oèçÏ^…Ä±LM“ÇLƒìnœT Ñ¯U
-Ä%J¦¬íşòVú³@`ó8ÉòpZ ‚ëıcZÃyÀâ‡ $°‘qD2Ôhs2zr¾ÊÖZ»9pØ±Éò–Ç¯=x‰û¨‰k› [„3+ÔD–qìv‘¨ÌUá¨0ŞJô  _%+Ôô³5Ó<Æ¾f;ÛÏ~øîûç­ÆÆ478 zš‰ƒ=Ë5ÄÊPÈ÷­(Œ‚‚|{@§wÙÄó«f‰9‰=”‘¨Ãf™1¥}öLÏ´F¤°&²ß~]ßA€%Qš¹ıñÀ¶›b€;E°ûS…4ãB"Î½œõWr­ŠBÃ ŸI‘ÚR+P³­Jå—WªÂ8X³côĞ¦ Š¨Ò§i«2IU9…4È×i,Ùé^I!°9Æ´¡múï‡½lAs/¢oAĞ&“B¶Ê’Ì)83RÎÔd¤¯W “Q;‘
-Ó¬­8 #!ŠŠÚŸf»¯a”'|LP»f;Ø•Çpö´±÷_t»j‚}ÚÕ «`K¾¼r j\ÜËªìèf¯Ùü¼M­ö´Û¿ìïİ¾¦-m Ç–AˆÏÀ®è  ¿¬$óhv£l)$Ìuæ4{¾>ÜHzLÔÓrxÓi°säş~‚=ƒ ´d	ÁF	È­Ã®Ë	Ša„\%‚®óÕ:oËşÈì% 1_Hµ¶´hín,ZÀÚT¨¸çAw`Ç³øZ{9"ù&J<•2”Â ,¼ª	à~N£@†Û®û#Î( ÒÖlËQÈinæ Ñ {ş¸7¸ÉE]À®nÇ`p·Øßë$øg/ÂI˜aÓà7W'IÚ)`²6&åÈ÷’”0ÅÃ=íwôÛÄÊ@If^¯OœJÓ…PØ‚ÜÏƒi>&g€,uøLÔ%¦ò{œ¹Ø¶M†¸î¹nœ¸F÷~«±#kÌâ6cHXg—/G†¢âòas7’ŒÓëXË€º…ïRü°ÿ^“¬f	ˆJ¹ú“0Fc]r7ğ‡sš€÷cîN¹>_İŠMS!ª­ªïuKSAª–\S°§Ou‰Võ*ìô’¢ ñ¼YÑTl2ªğTÎÙ¯Pdpb¡\2e¡Pñg¡ÔXP,ß•åóöLI¯Ç´·;W¾e	`	Õ/l›‡,€‘¾ÁM˜¤R*hx_WT4(/ÌS«%+`ƒ–Ç.ğAjø%÷w³°Á›z‡7-Ş4¿r9l_Lr 1?C¹æòŠ%5—Q-^.s‰ÌqäœÑW{"ÌaOŒW6ÍÑÁ­±A†!Oz’*• Õ~6
-D,N³{=„$¨a€ğm ÷†Â—»N(÷C0õ±’³€˜6¢õUÆö\öU6Š- &3CÏ?3ğ §àınÜ›(ÑVF¦e–Õ3K²kágò=†N:8ÌĞ4<Ò}Quf‹Àxñ¼¡y›ÒrÍ`ş®Ğáœ¬†,860QPvæ(Q˜àÕÁğ¤Å¬=˜ÙHwûHu…7®Z.„f—5ŸXCŠˆ! ³µÅá^/pm»9†Â= Øşë¼ÛìUŸ6Ìa\]KÉfÔX@SS«¥RôÜnvçİş¥ç~¼êÀü‹ÕÛ¢ÄóhR¨æà ¼±¬ÒˆÓÂn€0Ä [.ÙdJ»ƒ,IMürX›O:ë,í€Îè 2î¡‘d‹ào¢˜"ä2ñÈlt P2öÛşşûïY—m?ş\.ğ4ßPñS‡yèEm
-o-¡d	¸a=Úï+¡]¤¨ÄZÄKøåhéÄıù1˜s¶B©¯ğGYŒ†OÁ%—.bik”–ôBA éV%ES†º•V;R@ê:’QJH”ŠÅn
-€•£qIÍä¨!Şì
-”]‡ıó!‘EüW
-¦EF£­Nü¼‰f·\4c±6xPÀÔöS0…s	¦„Î˜ë–a€×˜!ƒı _ñaÅdĞƒ ÛçÄèÙ@åÿï<È<pÏg²ÏgòÏ£¤9ÈĞ­&‚E^zRßêq&*ê² €üèêÓÇ˜ö¸Élf¶ÛEÎêJlWj‚á¶ùêq™áÈ‹í-b®-‡³`S[“ğÕS®¶]DğûNñ¦©*Ñ×~v—¼¦›ôÌdğ˜‡F¸ùs:~{vzòÛŸìø<<;>¸ ¯‹³7'‡-.%µV"×Rh¤
-¾;ò
-dÅØÿ*`¥¦©àîj;>lgTÓœMlÈŞd¿„ó…Û*ÊjMFÿ«áf£G)Ø¼¨©¡8*8à°xêAQfafÀ°÷ËŞ[m W·°G´È²«óù‹nş‡30ÂhÊ¢gÜxt*Pëi
-²¸DÕ¯Qq<“§0—>áw^¨¨
-¬„‚‡Ÿ©wk„e±NšC¢# ™êÂcp³ü6
-
-±éRŒâëFãTx‡{\²ô[ğiH+ú-Mpc÷”ü ª‚“¿ÁA¿³€ ©0"s}Ó­Ï¥¶ôïÛúÊí‡±€—ût&¬qjÓ!—B\›3)&Ã…S»q±/@&$Â1*L—c¼0^ÜÂ33¨€Å£“s?úúüâèôÍL’!£,aÙ*˜†³[N*!^ú`•EÉµÑéøì¬ÏdT-k›S<ÜCÃô‰d¨9àpÏ]öÅ.Áá %Xõ!, a¿¾¸öJ%õ%a33Ä¿íşØâÔ-ŠPÌ¹k &õ¹G!O&<Šf@ÑÒ£0­<*‡Å=¤Âzü˜Fœ‘P(†¯}ŠÒÃ=Šğ­—­W|v…ãˆ·l1–IÈ¯|ÉÑZby% ê€P~[³¨rÄº ŒÇz šUçd¦œü¹ Ğeã‚ÔS‡Ë³uLöUcc6·døtC`*Õ’4üAŒ|(¡€1š•ÒÆ½ÚĞM]àF°t¥¼&˜Oåe1"ú5~˜‘öˆt¦ß_3»%!{É(£!r.wĞö^;pf)Ú…fÂóƒìİjİ}m —Ë uyÉL•ØØ ÷UŸPU‡Ò§1=ŞZœ=U[
-+ºÓ§R²½¤«ÃˆÍ‡W…iTw™`{¸'¬ 6†u€Íj¶¢Á«á¢õ4	ùÉ>Ÿ£/QX8Î3èÂ«‹ç€Æìœİ
-vM¤‡Œ=µ¡h[Cs:£öG1FßºÑÀÜlp§Zêòûû^	U]F=tu«iÊu%ğÆFDø­°75 ³¥A“O–u¸î‰fe’Ü³o˜YÁmš{Ö'oWÆñÓ4I»àŠê !ê×~7ÿ`,8¦(±*[a(È{¹xõªÁÑÇNe\êº®ì¶ÿ $ğH“uä£ÆÚFò£cÕr˜yŠD'qZ\Šî«ø¶Onç¬÷…( :ôé^%«ŒJ*±cSÛ®ÌN^Êè'ÛéjÛŸ›ZIz‹_<ã†BŒd2…¯z2æö¥nÀ”.=ÃX+uäl©N4~¶¨½Šœ–ÄºÀïE´v	­€’×xql…’™oVÙ\_®á×„F¤¦jT~¶V÷Û®îxpİU«ëÄ¸Ø„†UÊĞ6¶=÷©ÇÈ·™İùfôÑ±¬ë,Df[E|´È]²²§«Ê¼YèÒ+‚÷metqÂ188{ù;E¿0>à6Xp¹}Å±’J”õdIq^cF"PÛFšB-ØëH(Ş¹"· %ñW’};LxGÊ”šJMÎ¨±ûY ¾t=EŒÌ‹“8„% ı9–.§]hÜâB¤¨9§‘ÙHàé<O)AÄÍÂ-y6¤Hu3n.Œ¥"Á©VDUVŞÂm†&‚ÕŒ:Í1F]Hd6ãm7J5£•b`Ñ0ÅrÙÿş½oÈÏ{n<º³B´_mé1iée7ÑĞ6FBV¢õ¤î…Ã‚ÌÌZæù0¼@‚!mÃ]ß$çgÃ]Fæ1¢tÏh»ßÇÉuÌEH@)Î°)Àª!ûDŸ×PÌNØÒOêw¬X}:.í-§€9°â=_#®…d.Óº|V/”oí&ÅaTÉ¼Ñú1{²È†=BİğèiüøØÊüdKHOpìÈÃKº4Í¢
-®
-fçÀW”Ö[ÍÜ0f¨´ºeŸÀ–¥È¼4ã Ô©…X‚š†‘›ª!Îª1¡’g„ËÆc*ö]ÜóÊõsxÜp“œé$ÍY
-İ`Ò™Z¶º(`›$^‘iKÜˆnÛƒ¬•:]Š—¯sÔr®ÊƒV)10^š,)ãÊÈšj“›]g%}QêƒİT§ªáM 7 p~åq©1`Šl´òò'ôŒkTK£ƒÎ7İq²¹6éE5pvæöVg«%ºáJR•ŸÒf¤}”[E­.±üªGÕß|C|7¹8;¤¼ õ1Ñ£¼qøi ĞiQß)0zå'¦#ÈOğóéS””UÀí­j•»s…Œ½…U@4Üğ+0¼ãÜMfnš$ùíØ¦hŠ¢ŠAãÇwwZlW©f®[š‹aáË%bÿMÂØ¶:VK€rÔ
-£b,GÇXÒ2Uö¬²±éø„^e×›&ƒT“¿®ê¼İ‹5TÒ¥À‚µÆŒÙ’ËÌG´©œ`È‘A…jõŒŠ çè«ñ[´”§×d½­'YJ+à«±İ*·u(9^ü ½¬¨Vê+†CèR/+]\ËM!1F@'Yèg=Ü‡ËìÃAÖ{ «
-V¶Û5]aÿÓqÚm`æ%^{Ğ"®?2ƒz:¬+¾Äy‹i,tUê—r’H”‰Ì.ó8F6£óÿ·<ûŒl ¦ÎÉ­Ÿ=±]&ÁÂûbt{&î$~ ÜBt})û5hàó×¸éd.@§Y¶İUmÉ’ÅàDÅI²jTg%(ş)k¶GƒsXÄN¦Ó<Óœ2ö7g¢™ä<ìéÅ"Õ³î6«Š…rÇ_Ğ(óê2j!ŸÁNVeÉğäŸ¢‰%‰,}Ê®{È]Í»³}ïU.IF ij…TS«b„‚=ğ>\iáª*	GÍ7˜ÎP0úÕş"“¬ÙáZBáy˜-ì¬dçğ±akM0”!GìJ%U”†3±İ-û¥ş•t¦Ò°o‡P¶bÑà%VĞùÑJTšFÃıgÉŒù¤°AeğodMUÌè«]İ.2vcÃ¾CĞ.}§nPbĞÊìc,œà¢™ä Ëhyæ}†vÆQ¾´Qr:Î¨}ùnÔ¹r2GºµÜL#­F!Oğ"Ãq2.ä©Ü@¤’kaÿJÛ¸0€ñFĞÚ‹È&ª«,ĞĞ_pBT<‡‘”¦m„!HãJ	LYT°ç~ÄÛql£óôŒ©Tô†y/‚xŒì}œSMÍ9(º ”&£+J‰1ºB§Âè2•cŒTÌzÑ¥D^¡'ã|9‘­#‡Tv,Ïl-'ÃÖfÌÒ$¾<)VRˆ³-fÂVe9­>•k"S°>•Úm&r?f?˜),fÚ˜fö.› ¾Š@qI&1¹„¸·æÅ\1ÇLİŒéú,òîsyHFğ1ø'][ş@Nt8Xä­cLÍE>¬ÖàB*(BYœ -‹!•l>ÓÖÆ,¹p.¤ŒH+İv1¯#÷€mëõéÑøøüğàõñXŸ‡¿ÚşÁ·ğEn§°iímñç8ÊxVŠ9L‰İAc?¸±›c•Uk;-‰ƒœîî ò™0ÆŒ$êjšß—Ò—m1|Í²$é‚BšÇ˜Ñ(Í¨ë ŠÚí6Ï â—VOyªË¾¡„u-Ã=>òç 3u­Q¼?	æ°(™R–YÑ*rÁJ ªƒöK©¹àGj+ÄÛâ…[½hª/5¥­Bìç¦Ö;Æ8æKZ8u¦<í5F`1¨]L˜S¦”¦ØbÏÊ«‡Ô!îEuA*Š‰£f­©$3-™! ©Ş˜õŸ7§ÇºaÀFSZbØ‚ÒX¨Ç‹¿†¯O_½>;>?`_Ù­Ô[—Zâ(æ0¦¸ÁæÇ\œş2ü] eÁhªÀìiê.ì9<ùeøbxñÛğEy6¦´ã„ƒ#­ˆyk^\™‰µ»j±Ë­¯OO~¾ÜºrD·ÿ&şş‘Û?OÒó(èÂ°cšâ~À>{Ê¿0;O¬%œ2Æ‹|W‰›¨{ıëK|n+·ÌşñXPäh<Ş’mOdê­9_3I
-G&ğã¦´à\ñ¢fMšñXc}øæ‘™•å´a£¡¼0«:áŸÍ0Ë‰xÔGj#»D6’a¿Ãíû%:¸}Ù÷Sz¯0Ú¼Kï}0†/[YõÙÇ¸¦=5šª‘tîƒğR…yêÆJÑu _+Šã{÷—G%:c\şİ~g¿³DE¸ÉşÃÓÄÙÿßÁ‡=¢.¸û¬§ÈamlüV\k¤ô,êA•hÏX–ğ+ÆsiÆ;¡–A¦ƒ¼]Féõ¯°M@‰º£ío¿¿2>¨Â_ÍÎ¼VsqÂ¥4ÍUä×³WÃWÇüÁ‹çÏŠeÖt»A<Mü`ÌAè¤ü‚—7bùº´Ş¾/ø¦ü±MîË~ÿŞ,í6ã¾Q”€EÍš^!S+ĞñQ~ÿ×¼şÄ]‰#«mÂ‘)M4–
-k¦GN»×3½÷•iJ¹ğgÈb(·ô÷ˆQEÓA»*œIÓ »•Ãï"«‘ê¤+¬k{š(Õ…KU6½9CóøWR½œùŒQqÁøL>o É há\üq4Š
-üW€¿ …ü.@ÅŞÇªV2>¯Vì^¼ÉRdu¹…Ì„ c‹âZdÏYÂ¢up¡åŠ)›°ªRÓ±¯À¦Š¼iP¥–Õãx’ø·Jƒî‹_5¹sùnóÅñËáÉˆÙ—î_Ûîã«oœQl·¿şÉy·y|r4b£Q|…2ø’¬y¼Ô†Aõ(œ°š»`'XÖÕ2æ2çÇi00‡ä¥œÉ]s‡RÉ7¦c<|_)à9M1fNS3’ûÄ;Ö•EİÖú·@E"X/à„ìímŸoõ`Å7İ¸èQ.=Şä³É­‘5k¾8H¬óÙÅ§‡ä›Oƒ°- 6ÆFä¥H<rp£d0 *Äm¢3k;“IIs•3ÔG„†/pìB3Ğulä	{zxzòhÕ#‚Æ8go)IÎkÙÚÖ˜rW’mm‘ÅKÕêr‹p²¡çÛG-&$4–Ç…4	‹Æ%SÄ—vª´6h<Ù§NÅµ’{I -2R˜^Ÿé58w2²ª•ŠG¥ÓÑä´½>À½Ü1UPÑ{8¯¾®äwY°P—=¬fÍG†ê5®ÙBZÔ½~P£{İ·N×k³¦vnMŒ¶ÑpGÜ˜ Ñ’ĞVDm¿w`qÃH! ¾è®,g~WVöÄÛ"œDkx
- iü¶±(IÄ*Jm,Õ%™Õ>ÚÔŠumŠˆ¥×şŠÂDì^™uÎ¼,[Ó& WğŠÇ4·Ló«et\ÓÖBÏ„Î´¸9“ÑKMx»W¼U2E› &¤¢Ömab#°Ğ÷ÛÑ3ËÑÇ ’“áÀ¬
-»Ø"ØœEŞ<Qº–ÊÊi:m•¯BO}×waeàv>İä¸•ß¥ÿÖ1Ê%Ûú€¿ÿşû‡VË îîseS˜Vn F1›áI¡‘_4 °Ö±È×ü.5€t|!„2'b°§lûæ:àwŠ|YpÅ>*à«í‹›œ˜2ìf&ş…–'`½‡sz½–§KıT_	–r(â³ N»|áÈé#07™[$0‡`œvßĞ,EªZ…¥áö£N©ÀÅ(ñCm0#¢ ÂYJæÈñ~(Sè
-Ç®Û=ó®»İ¿(nRnŒazø WM‡nwÏğ&¹í¾)¹~æä6º ìêš¿:øcüöÅğâ¼ºe>ûÏ}±q¾éËıåş†«rÊÓ³èsÏ¿İ¥òÒ%†qB“õÌ¸ó_.E	B<på3ú:µØSíSZMA!I»Ü¨|-S\ÇzÒü5>¿8;>x5‘Û«rI®È²X†=CXĞß€«c0Ì'a3 É´ÑƒÓowmòEPÎÑù¨ğ¢`ŒW&#
-Ş,ÅÆâÏİ/`Ğ ¡w¿ˆC_¬cìcoS†	ÿßSáö!˜Ú|}¹q‘~pô½á‡Xdò±Ê$ŸæÖ—0Mşù‹” ‡l>ëßqÈÃìÔ	D™xjÆPm:i'Îq,¿—N;íw¼?ÏÜöd"¦ºÓ[`g´«mJÂL½²ÁseÛ˜T‡§öÀ¾=×ÀÄŒ´hÇ'—«ü¶Á©cXJbû‡’C²†Lê‰—*«ØésÚ¶Ó(#Wß¹õJå¸ Ògû*J
-£àâN¸wme}ˆa«L/š6{éàåÿ¶nÜË/.›¢er
- ~-DL×Áôj’¡˜><FÔù½á½ë›‚vi6:?‡‚ìåÉj‚5‡'‡	Ôë°mfux±E/Òâ{¼²²¡e%ùe#D™0vÎ¶ÆcœÙx¼¥ƒIäõ¸Pî v5|~_·àlH÷o¶@T$\)©Ñ‚ç÷uÒŠ."Ÿÿß#%_‘^Â•IˆC|aôT\™6ú£ÑtÛ%Ù^-·F–ôßÑf¡%—”d|Re§Ç%©°ÙÌ³"!LğbD<RQ:¦º+d³«HÙ1wy(î
-‹4¶5ÏÍ“ûMŠK™”+Á ä'|hĞĞ$H:Bš0l¯O0 QÁÓ8>=Ç“Ÿõ<oÔ¼;lÆx?qsÒvŠ±X vi`]€“Ê%úÑMvi‰#EKã—¸©“tlÎ
-çX[NC·p^˜oòJ
-Õ$<oñ;C<j·ÓSÏUœÿ||v|rîo{¿$K`ÖyğÏ"ÏWY·Ó¹¾¾nÏÃ|±´`ç6	¯=|Ï;Ã÷Ä;Æ½sìıú6_$ñVÆ,¨€B‹ÑKİ£FÕO¦Y{E­ÛI:ïqçÛxV»Ãû¶ù2ê+,Ş\ürzÖ9<}ıçÙğå/Æa²ºMÃù"¯DíİÒbÜş/½œQzT=çâÃê-óeuP½ø¢¤¨Âƒ›Ûdô¾¥à2Æ|èª;9ÑÁ¾|ÉÄslQH¯(S6t®¡·
- ÉD¼È€oIH'^>îîå@J¤” ¿G("Ş$ëü6<<>9?vM Ñù°¯ˆîN@Û®(¥Q¼kz‘`üÊ>¾ÔÆß|i±,™å× ~ˆp²Îä‘8Á<ÍÃˆ™upÎ†ç{qp>¿æí–èÍ{‹WïO.†ÇçìôÏ7†ø¼;üú™œüÉ~µXÒ“©Á?q‘WB»ô>¥9¸¼8!nşMaFñ|B`/xÄ"BBÒ(¡çüy«üA¦êtğ‰ÊõC€¶¥ÕWÔq¿ÿ’ñ•
-³†¤Z‹‰çæÕcYŒûÏÎVtO/b¯è~ÀõDmì³òÃŒhÄ[<I«ÁõbQ‚¯aÓÁ ¼Z§+Tçœàã:Ißgòßğ°éÊeÔH¶%ÌPÔ%>¿aÉ\@¼Ï	ËîÏùª[x=&Ñğ&	=ÒY#ò¿Êñ™z=Gac–-@_µpRôÅ˜2ºÕ»IâAkQÿçé›3Í¨òİŞÒÿ%‚:°ÄÑo‰g°ß9¾zCLü/PK   e
-]e'¿-  9     ZipPerlApp/ZipTiny.pm­ısÚÆògë¯8cÒˆT`Lì´‡gj“„yIœ1NûZ'Ãq€^„¤JÂuü¿¿İ½„ì$3/Ó&p···_·_wì±¿üøÒ7]æ²şeş*øŠ‡™›ùQÈ¢9ûÇ™›xKÿš3/á4îX{¬™Ãò‹Â`ÃnülÉŞó$`^”p¶Šfë€§-N×q%°Ç‚_ş‡-¹;ãIÊÜpÆ²ÄõübG	mçE+D›6`),~ï&™¤$än·˜í5X§İ9b®3÷³ËÎGp£7¾ÇÃZ‡€Ÿb×[r5Ê~‡]­N«ÀcÎÙÅppövØZÍØvŸñh’-XøÙ]pr4ˆãnW
-‹]wZ­vÏ²^ÄÑşFfØ»ÁÛ¡eUÀÿ p­DeJ§¥w>O/Fï/Gçï,ëré§Rô%‡¥,¥½ÍıœTbUïóöüìÃ›á¾{ëÌ²Ö Ñ£V»sØ£i–ø^&>O7°­ø8:ïv_‚~{V´NXıløÛ‡WìkËïãÑ_Ã7£·£K;hşzôË3ö„=“8Oİ$î‰Æ¸I·û!óƒ$©Ã¼ÀMÓ*%u»§Ñ*NxšÃ,ÙXVá+K8~Aö@8s qŸK”BŞGaš¹¡RÄ¹¥+6…òÄEûŸ'ÑJ&%°§ìşv§€|îó`–¢ràsÑJ]ŒÂ^è‘Ó[§8™-¹µâÙ2š¡¡Àzã(œá\è®8é%º#?„~ÆWlã]ËrYXÂ¯5æ‡%°ÁÁ3á´xR<ÀËÌÍ\\l­Ze¾ÜLÌŸû0eE2%¢øú_hd¸Š[Ö»(ã äfË¿ñƒ@x¥_]Öi¦èRÖ	m ÷OÁh<.ˆöCĞÈ
-æaW$HŞZÖ9"]#S®ĞŸËf¾»£4ó=¯“8J‘ ç’6ÜE
-»œÓX•-¥6ÏİË"6Å ^o†l»^"¤Fû»×àSH¹î<}k]¹Ÿùö£ÀÀ>ká®Š„>±âú!KWâ¢éÎyÂÁ"ËÆª¬ìZx¹„ÿ½ö GSÍ„=9ÂnA ¸³§>œ‚ƒf§‚˜‚ßSüX:^ìÖbğGw5×í^¸7g¶µÛÊş
-ü)MåsâÌ«¯òü}c“y+İ
-KTzWC¤2­Ekgg’úÿğÀ_ù›Ìøt½˜Ì—jÇt=e!¿avı¤\ì¬6l2y?8ı÷àÕp2aõ”spMéÒŸƒoÛQßUİ.,µi¬g(@ƒzÄ*Ø ±=Z¸-Î&{Ñ§À4w€*¦Y)
-ÆŠc’Íâ`ckõÉ„!k;3Ÿ+ŠRòœì3ß¤DÍvT‚€Õ~¦[_Şwì§Ÿ,@fŒKZ+fˆŞ;Ä¸Çb4ÎÌ[ÁÀƒ> à!ÈAJŠá¸¸×‘?cŸxk¤MÛ4Hxy«•t¢ƒïbÙ]³KHCÅ0Â÷Äz­ï-ù€ÎxÀÁ0s dâ‘Rñ£¥Ò7¬3‘’ÄÍy´¹ª	e†Æ
-ÊŒfİî?Új¤¦Ñc{l
-æs• ¬„gë$TÆ†Æ|—Û´°7»FÍàäªı	ĞKßiXe‡•ĞZñ9¼°ĞJha&n:ŒÕ˜…ÌrX%«"øÉ­Z ei.’G£r1‡Ğ*"¿U©Ó6õÚ°,Ğ1+Ğ^Óôô"ÙøËA²Xc–”C“oÎ!gOq*ãøØn>.]‚Ç³ğk¤‹qc"Aşñø}L+~ƒOs	ìü!]C¼Ø°0ÊÀñF8WCø¹x~/6=¶kD¸U€î:‹ğˆâwÊ\Èóç–!¹²ëuå…™:¬^˜÷ÉDº¼º:xú¤MOÌ3Š0¹O6€Ìã©ÜŸçî¦ò8¢;¨œà©TôIg¬VÑWI–öÉjR¨i2†Nb<Ñ¦¾¾í@&ë°6ùa/‰àüÖx’DIWîÜME3ÄVÄWCí€‡‹li+ÌÖ7„D¸Ê+²„<
-K!ı âdà/Eb²¡€¨˜évIÇş¨öwØGÁmâ
-Ø ÏÑjÓ²1²9Öo³šD^ÅAÇa‡Ï„0v@!AŠL9èÃ¬¢ı¾ì¡ÛMÜ›™ø\A£Ãšoğa0,Úe‰øK‰j2Eu™¾_ì_ì€u·g:8Ó†™N÷¿:P¤:1IÀÚ‰ápgsãŒÔ´(áĞ?J»ìÑŒ5ûğ÷Ç°æhÃNÛae+1FHYhJwCD¨ .€€S.
-]GºLÖági[e<~QÂ®õTq¶Ù7pş}gAæÈ½5Äü}d+2ˆã%÷P¶?j¦t”½ûvJ­ jøTcº”ğE–“ä×e¸AÅ»Å"E1°Î3åûàß1#öÁFæ~’R"%Jü-Ô§Ç•öËÍ¨´MÅ |PØêC 1¾û<í;Ô]PÑ¯HŒE«u¥Ò2Ëÿ<9—˜˜üw²tSÈµ'‹dfò]È˜G_~šµZ­Oˆ?™/c±’^Ey>‡i\ˆµŸ+£±(Î t0¢¦œjì8‰<Q»A1XäÊ7¨Éœ€P¿Œ’XÔœ–jé.(ä‡J\ 3O-LğfWŸq²XQ´0u{§§Œ`Ú7z*z^ˆç¨ÿR§@İgŸŒ/Ï†j²aòÑìâ²O&äg(à‹ˆcf¢[ÙÖd’ò,Š3[“éˆÜ"@Ê<e:k!+vík£Ùñ«î(\P¦á3Ù”ó©•öÊıâ¯àìøa¼Î¨A-)]êÓ¾°ò%§4NGñ4¹ÀS¹5Aœ¯3wÅ®ÖÎMÀeï°¼JöÈãSa_¨®Ñª”dÀ´zu‘b}Ûº$„]7ÄY—òÔ®_%d†oe‘±œíï³g‡ì‰jÀ5ŠËdÑõB"g_¿b÷nBÕkÚ¦Ì¼-H[Ö¡ı’-Zpv%r÷Tú *uê@¶˜,½õ×È5*W@Ş7¸q¡öÕ=±­~M¡Ó…8´Åná(”Í#í^ĞPG	[yØ(*uâ+Ü¬³´“è i"f,‡iU¬s°'÷aĞ›®3Å›~õ\›n·Ê~±)Jvµ£€®Æö±.J–j\²'wz,¡ú#q°³ˆUäwceiE7ôT-ñU?m{Xàô~ø ÂRA|Öõª RÉ¥jáy`Ÿ³ÚlH¼2
-¦0SeÀ¿@xKõa3Ã ¶4ìò×F	#§¶ú<yõ¢s_Ğñ$‹&^¥ÜW¥’D%§0ƒğe$cX‡ˆdŠK¹J0]³¹ƒËŠ­(æ¡°­—Î2¦&à0ÈİÙ"ˆ¦âitÎÒ ğáÆ3ğìÉËÑ›¡ÊOµ¨Ï·£ó;™¦–2QÕ‚Ã&/Ú'v1[¨İ+=¶©Â:˜ŸK7Vİ¤K,‚3	õ?PªE Gïl™DëÅ­ó°!#¾ÅuGq-;x?†B¤¯AL×HCµ-¶‹…uÓìS&¢-¶–Ô*ÀRéÑxnˆl¢¾`xWÕMÀ*Õè!6õôe†ËüÊ<ú^Kª½zsş[Í´&Å+Ô‰FÜe«5øù)Ö¹-’ÄG©ÿtÿÿÑ;õC
-6zsÕg|:x3¸(Ÿ§6jÏşÄeM®¬YLş1µ®?ƒeÔd½¢Êîâ¾!‡K½9ÔìƒíÇèû7LRÉ5À“Ò3ö¬XDŠ¯ø(•é¹—ájøƒ$-F jÅ1á	ägÁ+Ï¼–±R9jYaŞ’Á^°--j¤Nı<.§úJ†ŒB3dTÜÀÚá>²[•sßcwª£²«õ«]·*rå€á´¥Œp'ĞOn`ãˆáÁ®bwùÁ[C×óxœÉ®ï ‘CH $ k²,Yóípf ¨{bæ0/97©…¨Í8íğíï€¡Î4Ú&V±`Î a¦ës»ÑäâÊ\h_è¼ .//×¡ùN`kõDê»Fçœˆ®j¸…0ƒi8,œu*’ÚFï¾ƒô]ˆ‡|5Iv{ßîHPù 2.[¤Ê2§¨Ø°–HEø—,q´â]ºö6ı“`TRnºvCŠˆ¢‹–!u†éˆJk&¦²é¬H”í‡¼rÛÔ
-·†uã?6•t»zØôú€BŠò^èö2ié«(.¡<¼H((!wŠ*…(=øíHò-Ò#·m:EŠòÛ6­ k'¿Y“Œé8%Ë/ÛHõr'U#Çk(ÉOnK)ÚİC‹¥{ó7´‚®®©÷0†*#Ã#eÜª£®_.÷ßÏÎÇLÜ¸‰;ïòÍÿ„2ßô„ üÇå_hÍhQ-‘Ï¢tF7µfl×q;•ÒbéoV ˜ğÂÿK<•øym0ˆÀ¹“õú"cm2­ú†³_Û§šú2—è nX@ØÏì ó^‰m¸›°ÎAû—ÜJ¤Ûõ%;>fpÖ¾Â—~9ÂÏH*ë÷ájâëÄ*¬AšHB?§•°tƒû54»>ké·ŠPü$é%àƒgšÒ3Ê^ì§ˆÛ$ˆ‹²ĞMÁScçO—»¾h&l¼C‰…ZW4Ãòh-PQ×¯Yd™ÁVUM„{şXÇ;y<2t2ëÀ!Ls^Æ¯ó{
-#æ¥€7¸¸ü™âªê¤Îe€)õ¤6ö	×:Şª ÓÅ|£så‡^°ñIlô–%V¥"Vûó¼,Ï¡Dßõ%*nçJ/j
-[‹-ôAÊ{ÑE¢lòB|z\pıâÍdE‡a”1…êô˜bmIG/<àûAÊ8‹4ÌaËeŞp%ÎD“ÙM5i…-ë-f5ù¸Ià Ä^ı„ãó9Æ;)¨üq•!2m¥Z3êjòÊö¹Ù“ğ­"{~GæAWëZSÿ§½¿gÓüD~ÿ†ùúv\²«|’jòÛWŸofë¨ùê0Ù„3oÇÍwG˜{k¡:%ó-ùQ^¹ƒñ@±&9iGQLÛnJGY9•ù`1äÉ2|<ÓO°;Ğoª>óÍM”©Ï·zsêÆfî¹‰göAó9Ô("s·gy/?­¸—›ˆÇ”°İiÁ4Æ]áÔµŠ„ŒæsˆÂØ$Ä&6œZ¡:Ç¸.+¬c6>0›Í|QDìõpp6¼h(|ò5­|½	xå'q¡Î©x[SòğìèèéQŞ/÷Èô»ïÊØOD–zaõ	=}Eb'ü~%S˜zÛ–#3ÂÆ24²GqI'±•ã®Ø\”¨'â¦œŒ>’TĞƒ.ı4ÉsñöŠIµãP­¦ÆŠ
-)Î	åã˜J
-{¨/ “`ÅÂE©¨Ë°(Ÿˆ´V|	f‹—`¹r^°C£ã§h‚OâVŒÜå©S¥4Oãù0¶C^è¶,„@&Pû®Wë@d\&ÀÜƒØ“‰÷À–õêú«Êu©.'nÖ2ˆ;İU¤"r©0+AººJ$Hô4'²æT-Ï{Ÿ†ğò»£S s+™îŠe‰ÃÅİ.Œ>íı¼½&¬òa’æKÜ54Buõğò~›b‹UÏ<ë[/AåK¹8¿Ö†Íõ­½-?b6Û€¯ƒh_eÜß…Úµß¯¯¯‡?××dÎ`Ïí/íÃöÓÃéQ[l ‡iõ¥Dµ•¥ˆ­{2:ñäG¡C)ò˜®ïÌQY©PGPa.İb€­[˜h°–€“</*˜–\ÓÅ:òŞi¼ãÈÓp²{LJé/è»ìi«MO£%ä=b*ÊéAİ+)ST•²ºGXUÒbmçyÉ)J~…‡“ëÍÙ™Ÿ~fáz5åI¡ÊŞŠ›eùÌA»ıìğPSrÛª+#W3¹i&MüOq»¬A°jå%„{Æˆ~Rá£p~‘/NêçŸ‹í“‡=‰®L…÷7İi1 n•{³²¡]«PÖô¬}¤ì‹$XüWRYùM©t›UÌ”`%•ê.X‰mE	 ˜(HLÅ”&eWc¼Â†9¹yÈ@ é ¡}2Áşd¢Ò¼|`/V;®9ìcM^‹Ğº^pQ€÷(&Ğ{ j~¨#"ıs_»IYİdººª´`5mE{ÔèµÆU­Sï¨q™ËÉ'/Ã@¡¹3±s=ø^ÖÛŸ>Q?+O@ìúàâÕïWíOx•©«‘ˆìíîÂêŠ,dww¯&ÕKO€wRÉAOÿâçbørx1|w:´¬7Ç¯£İÿºÌ²8íîïßÜÜ´¤¯§-À»¿‰ü·ƒ/ÃŞû~şs­>®~¿¯>NY&`°Vú9”Æ:‹¼´t+Jû<Üº13q“Í¾XÛZf« ¯©|¸|}~±zşşÏ‹Ñ«×—øcŸx“ø‹eÆÀ)?o–)Æ7ôå)nı—5•~9†åHñ×cùó1f#@MN¡7Ñ¼x‹O£¨ç/š_°ñOİQPYàçÅM–coYJÑû5ô 9Ş¨ûnõ67Q¢¤¤ø]"‘ätÿÍètøn<l™ £ê­‘ˆ-ø$ˆ×ÍX=îveİEÂE•;ß$~Fñi4Ïn œ²Àƒ…N×YA<Š&àÓ A©WŒÙh\c¿Æ£±cı1}¸d`şîr4³óvzşîl„?[ƒo/ÙàİŸìß£wgz;Í¿ÑV||Cƒ¿Ù37×¥cÌ=¼2ÂÅµ²À²ú^`†+Ÿê3ñë6jØ»"ŸŞbGuşPK   ï]My[k1  FB             ¤QC  zipperlapp.plPK   ‘
-]dtwƒÜ   Ûa             ¤­\  ZipPerlApp/SFXGenerate.pmPK   e
-]e'¿-  9             ¤À}  ZipPerlApp/ZipTiny.pmPK      Å    ’    
