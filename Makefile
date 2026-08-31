@@ -3,12 +3,15 @@
 COMPRESSION = -C9
 ZIPPERLAPPOPT = -p $(COMPRESSION) --random-seed=314159265
 
-all: zipperlapp
+all: zipperlapp USAGE.md
 
 zipperlapp: zipperlapp.pl ZipPerlApp/SFXGenerate.pm ZipPerlApp/ZipTiny.pm
 	./zipperlapp.pl $(ZIPPERLAPPOPT) -o $@ $^
 	./zipperlapp $(ZIPPERLAPPOPT) -o $@ $^
 	./zipperlapp $(ZIPPERLAPPOPT) -o $@ $^
+
+USAGE.md: zipperlapp.pl
+	pod2markdown $^ > $@
 
 release: zipperlapp
 	git tag v$$(./zipperlapp --version)

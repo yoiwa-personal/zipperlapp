@@ -13,6 +13,8 @@ the `@INC` variable.
 
 Run `zipperlapp --help` or `perldoc zipperlapp` for usage.
 
+[USAGE.md](USAGE.md) contains auto-converted documentation for viewing within GitHub.
+
 ## Content of the GitHub repository
 
 The standalone portable script, processed by `zipperlapp` itself, is
