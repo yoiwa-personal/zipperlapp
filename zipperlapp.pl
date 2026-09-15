@@ -146,7 +146,7 @@ exit(0);
 
 =head1 NAME
 
-zipperlapp - Make an executable perl script bundle using zip archive
+zipperlapp - Create executable Perl script bundles using ZIP archives
 
 =head1 SYNOPSIS
 
@@ -165,9 +165,9 @@ zipperlapp - Make an executable perl script bundle using zip archive
     --base64            -B           encode with BASE64
     --text-archive      -T           use text-based archive format
 
-    --copy-pod          -p           copy pod from main module
-    --[no-]protect-pod               hide unwanted pods from processors
-    --quote-pod                      quote pods in archive (zip incompatible)
+    --copy-pod          -p           copy POD from main module
+    --[no-]protect-pod               hide unwanted PODs from processors
+    --quote-pod                      quote PODs in archive (zip incompatible)
 
     --inhibit-use-lib                disable 'use lib' pragma
     --random-seed=...                specify random seed
@@ -176,16 +176,17 @@ zipperlapp - Make an executable perl script bundle using zip archive
 
 =head1 DESCRIPTION
 
-This program bundles several Perl module files and wraps them as an
-"executable" zip archive.  An output file can be invoked as a Perl
-script, or (if a source file contains a C<"#!"> line) as a directly
-executable command.  Also, it can be handled by (almost every) zip
-archiver as an "sfx" file.
+This program bundles several Perl module files and wraps them into an
+"executable" ZIP archive. An output file can be invoked as a Perl
+script or (if a source file contains a C<"#!"> line) as a directly
+executable command. It can also be handled by almost any ZIP
+archiver as a self-extracting ("sfx") archive.
 
-Inside Perl scripts, all files contained in the archive is put in the
-top of the searched library set.  The program can simply use C<use> or
-C<require> statements to load the contained modules, without modifying
-the C<@INC> variable.
+Inside Perl scripts, all files contained in the archive are placed at
+the beginning of the library search path. The bundled script can
+simply use C<use> or C<require> statements to load the contained
+modules, without modifying the C<@INC> variable.
+
 
 =head1 ARGUMENTS
 
@@ -193,13 +194,13 @@ the C<@INC> variable.
 
 =item B<directory>
 
-If there are only one argument and it is a name of directory, All
+If there is only one argument and it is the name of a directory, all
 C<*.pl>/C<*.pm> files under that directory (recursively) are included.
 The directory name itself is truncated.
 
 =item B<files>
 
-Otherwise, all files specified in the argument are included.
+Otherwise, all files specified in the arguments are included.
 
 =back
 
@@ -211,55 +212,55 @@ Otherwise, all files specified in the argument are included.
 
 =item B<--main, -m>
 
-specifies the main module which is automatically "require"-d.  Also, a
-"she-bang" line and continuous comment lines at the top of main module
+Specifies the main module which is automatically C<require>-d. Also, a
+shebang line and contiguous comment lines at the top of the main module
 are copied to the output.
 
-If one and only one script with extension C<'.pl'> is contained in the
-input set of modules, it is automatically detected.  Otherwise, the
+If one and only one script with the extension C<'.pl'> is contained in the
+input set of modules, it is automatically detected. Otherwise, the
 main module must be explicitly specified.
 
 =item B<--includedir, -I>
 
-specifies the locations to search input files, in addition to the current
+Specifies the locations to search for input files, in addition to the current
 directory.
 If this option is specified multiple times, the files will be searched
-in order of the specifications.
+in order of specification.
 
-This option will have two kinds of separate effects; when C<'-Ilib File.pm'>
-is speficied in the command line, as an example:
+This option has two separate effects; for example, when C<'-Ilib File.pm'>
+is specified on the command line:
 
 =over 2
 
 =item *
 
-The command will include C<'lib/File.pm'> to the archive, if C<'File.pm'>
-does not exist.  This behavior can be disabled by specifing
+The command will include C<'lib/File.pm'> in the archive if C<'File.pm'>
+does not exist. This behavior can be disabled by specifying
 C<'--no-search-includedir'>.
 
 =item *
 
-The file C<'lib/File.pm'> will be included to the archive as C<'File.pm'>,
-triming the library part of the name. This happens either when the file is
-speficied explicitly or through C<-I> option.
-This behavior can be disabled by specifing
+The file C<'lib/File.pm'> will be included in the archive as C<'File.pm'>,
+trimming the library path prefix. This happens whether the file is
+specified explicitly or through the C<-I> option.
+This behavior can be disabled by specifying
 C<'--no-trim-includedir'>.
-
-If two or more files will share the same name after this triming,
-it will be rejected as an error.
 
 =back
 
+If two or more files share the same name after this trimming,
+the command will abort with an error.
+
 =item B<--output, -o>
 
-specifies the name of the output file.
+Specifies the name of the output file.
 
 If omitted, either the name of the source directory or the base name
-of the main module is taken, with a postfix C<'.plz'> is appended.
+of the main module is used, with the extension C<'.plz'> appended.
 
-It is always better and safer to specify the output file.
+It is always better and safer to specify the output file explicitly.
 
-A single hyphen (C<->) will let output go to the standard output.
+A single hyphen (C<->) sends the output to standard output.
 
 =back
 
@@ -269,50 +270,49 @@ A single hyphen (C<->) will let output go to the standard output.
 
 =item B<--compress>, B<-C>
 
-specifies the compression level for the Deflate algorithm.
+Specifies the compression level for the Deflate algorithm.
 
-If C<-C> is specified without a digit, the highest level 9 is set.
+If C<-C> is specified without a digit, the highest level (9) is set.
 
-If not specified at all, the files are not compressed.
-It makes the content of the script almost transparently visible.
-Also, the script will not load zlib and other libraries run-time.
+If omitted entirely, the files are not compressed.
+This makes the content of the script almost transparently visible.
+Also, the script will not need to load zlib and other libraries at runtime.
 
-Outputs generated without C<-C> options will not contain decompression
-functionality, that means you need to add C<-0> or similar options
-when you modify the contents with zip archivers.
+Outputs generated without the C<-C> option will not contain decompression
+functionality, meaning you need to add C<-0> or similar options
+when modifying the contents using ZIP archivers.
 
 =item B<--bzip>
 
-specifies to use BZIP2 algorithm for compression.
+Specifies the use of the Bzip2 algorithm for compression.
 
-This compression method is not common, but it was implemented around
-2003 (PKzip 4.6) to 2006 (Infozip 3.0f18), and most current
-implementation of zip archive supports bzip2 compression.
+Although this compression method is less common, it was introduced between
+2003 (PKzip 4.6) and 2006 (Info-ZIP 3.0f18), and most current
+ZIP archiver implementations support Bzip2 compression.
 
 =item B<--base64, -B>
 
-It will encode the embedded ZIP archive with Base64 encoding.  It
-makes the script about 40% larger and also loses zip-transparent
-behavior as an sfx file, in trade for making the output script
+Encodes the embedded ZIP archive with Base64 encoding. It
+makes the script about 40% larger and loses its ZIP-transparent
+sfx capability in exchange for making the output script
 completely ASCII-clean.
 
 =item B<--text-archive, -T>
 
-It will use its own plaintext archive format for storing modules.
-The output will not be compatible with zip archivers.
+Uses a custom plaintext archive format for storing modules.
+The output will not be compatible with ZIP archivers.
 
-Output scripts generated with this option will be plaintext, if all
-input modules are plaintext in ASCII or some specific ASCII-compatible
-encoding.  In addition to that, it is easier to modify its content by
-hand, because the format uses no byte-oriented structure.
+Output scripts generated with this option will be plaintext if all
+input modules are plaintext ASCII or an ASCII-compatible
+encoding. Additionally, it makes it easier to modify contents by
+hand, because the format does not use byte-oriented binary structures.
 
-This format will be useful when (1) you need to edit module sources
-embedded in outputs by text editors, or (2) when the whole source code
-must be transparently visible for auditing or inspections (if even
+This format is useful when (1) you need to edit embedded module sources
+using standard text editors, or (2) the entire source code
+must be transparently visible for auditing or inspection (if even
 C<-C0> is unsatisfactory).
 
-The combination with the C<-B> option is possible but not very
-meaningful.
+Combination with the C<-B> option is possible, but not particularly useful.
 
 =back
 
@@ -322,43 +322,41 @@ meaningful.
 
 =item B<--copy-pod, -p>
 
-If specified, it will copy all POD (Perl's plain old document format)
+If specified, this copies all POD (Perl's Plain Old Documentation)
 sections in the main module to the output script.
-This option is requored when the script uses the POD data of itself
-e.g. by C<Pod::Usage>.
+This option is required when the script uses its own POD data,
+e.g., via C<Pod::Usage>.
 
-Alternatively, when compression (-C) is not used, it is likely that
-any pod-using modules may see pod sections from all of embedded
-modules within the zip file structure.  If only your main module
-contains a pod, you may be possibly depend on that "behavior" and not
-using this option, although it is not a reliable behavior.
+Alternatively, when compression (C<-C>) is not used, POD-processing modules
+might see POD sections from all embedded modules within the ZIP file structure.
+If only your main module contains POD, you might rely on this behavior
+without using this option, though it is not a guaranteed behavior.
 
 =item B<--protect-pod>
 
-specifies to protect any POD data inside the zip archive from being
+Protects any POD data inside the ZIP archive from being
 processed.
 
-Unless either compression (-C) or Base64 encoding (-B) is used, POD
-sections in the original source scripts within the zip archive may be
-visible to POD data processors; it may either be or not be a good
-thing, depending on the situation.
+Unless compression (C<-C>) or Base64 encoding (C<-B>) is used, POD
+sections in the original source scripts within the ZIP archive may be
+visible to POD processors, which may or may not be desirable.
 
-If C<--protect-pod> is specified, a small POD is inserted to the output
-so that most pod processors will skip such ghost of PODs.
+If C<--protect-pod> is specified, a small POD header is inserted into the output
+so that most POD processors will skip the hidden POD data.
 
-This option is automatically enabled, when C<--copy-pod> is used and
-a POD directive is actually contained in the archive binary.
-If the process is not wanted, you can specify C<--no-protect-pod>.
+This option is automatically enabled when C<--copy-pod> is used and
+a POD directive is contained within the archive binary.
+If this behavior is unwanted, you can specify C<--no-protect-pod>.
 
 =item B<--quote-pod>
 
-It will tweak the embedded ZIP archive so that the encoded script will
-not contain any active pod specification.  The tweak is performed only
-when it is really required, but if done, the output will loose
-zip-transparency.
+Tweaks the embedded ZIP archive so that the encoded script will
+not contain any active POD specifications. The tweak is performed only
+when necessary; however, doing so will cause the output to lose
+ZIP transparency.
 
-In most circumstances, either C<--protect-pod> or C<-C> is enough, or
-when zip-transparency is not needed, C<--base64> is more reliable option.
+In most cases, either C<--protect-pod> or C<-C> is sufficient, or
+when ZIP transparency is not needed, C<--base64> is a more reliable option.
 
 =back
 
@@ -368,33 +366,33 @@ when zip-transparency is not needed, C<--base64> is more reliable option.
 
 =item B<--random-seed>
 
-specifies a seed integer for pseudorandom number generators.  Some
-features (e.g. C<--text-archive> or C<--protect-pod>) use random
-numbers to generate unique byte sequences in the archive.  This makes
-output archives for the same set of inputs to differ time-to-time.
-Specifying a random seed will make output somewhat deterministic.
-However, it is not a strong guarantee; the output may still differ by
-small change of inputs or even small environmental changes such as use
-of different machines or system library updates.  Main expected use of
-this option is to put the archive outputs to version control systems
-such as git or subversion, making differences as small as possible.
+Specifies a seed integer for pseudorandom number generators. Some
+features (e.g., C<--text-archive> or C<--protect-pod>) use random
+numbers to generate unique byte sequences in the archive. This causes
+output archives for the same set of inputs to differ over time.
+Specifying a random seed makes the output deterministic.
+However, this is not a strict guarantee; the output may still differ due to
+minor input changes or environmental factors (such as running on different
+machines or system library updates). The primary intended use of
+this option is for storing archive outputs in version control systems
+such as Git or Subversion, keeping diffs as small as possible.
 
-In Perl, the seed will be an 32-bit integer.
+In Perl, the seed must be a 32-bit integer.
 
 =item B<--inhibit-use-lib>
 
-An experimental option:  it will nullify effect of C<'use lib ...'>,
-so that local files not included in the archive will not be read.
-It will break if any system library uses C<'lib'> pragma, thus
-use of the snippet in the APIS section is recommended.
+An experimental option: nullifies the effect of C<'use lib ...'>,
+preventing local files not included in the archive from being loaded.
+This will break if any system library uses the C<'lib'> pragma, so
+using the code snippet in the APIS section is recommended instead.
 
 =back
 
 =head1 APIS
 
-There are currently no APIs visible to user scripts except import
-hooks.  The package C<ZipPerlApp> is provided in the zipped script, so
-if you need to change some behavior upon packaging, something like
+There are currently no APIs exposed to user scripts except import
+hooks. The package C<ZipPerlApp> is provided inside the zipped script, so
+if you need to alter behavior upon packaging, a construct such as:
 
     use FindBin;
     use if (! scalar %ZipPerlApp::), lib => $FindBin::Bin;
@@ -422,83 +420,80 @@ also works.
 
 =item *
 
-Only pure Perl scripts or modules can be loaded from zip archives. For
-example, autoloading (*.al) or dynamic loading (*.so, *.dll) will not
-be available.
+Only pure Perl scripts or modules can be loaded from ZIP archives. For
+example, autoloading (C<*.al>) or dynamic loading (C<*.so>, C<*.dll>) are not
+supported.
 
 =item *
 
-C<__FILE__> tokens in the archived file will have virtual values of
-C<"I<archivename>/I<modulename>">, which does not exist in the real
-file system.  This also holds for the "main script" to be referred to.
-It means that the common technique for making a "dual-use"
-module/script
+C<__FILE__> tokens inside archived files will report virtual values such as
+C<"I<archivename>/I<modulename>">, which do not exist on the real
+filesystem. This also applies to the main script.
+As a consequence, the common technique for making a dual-use
+module/script:
 
     if (__FILE__ eq $0)
 
-will not work.  Instead, please provide a short entry script as a main
+will not work. Instead, please provide a short entry script as the main
 script.
 
 =item *
 
-For compactness (and minimal dependency only to core modules), an
-embedded parser for zip archives is extremely simple.  It can not
-parse archives with any advanced features or partially-broken
-archives.  If you modify the packed archive using usual zip archivers,
-be aware of that.
+For compactness (and minimal dependency on core modules only), the
+embedded ZIP archive parser is extremely simple. It cannot
+parse archives containing advanced features or partially corrupted
+archives. Keep this in mind if you modify the packed archive using
+standard ZIP tools.
 
 =item *
 
-All files are decoded into the memory at the beginning of the program
-execution.  It is not wise to include unneeded files (especially large
-ones) into the archive.
+All files are decoded into memory at start-up.
+Including unnecessary or large files in the archive is discouraged.
 
 =item *
 
-If C<DATA> handle is used, the marker token shall be C<__DATA__>, not
-C<__END__>.  This is the defined behavior of Perl.
+If the C<DATA> handle is used, the marker token must be C<__DATA__>, not
+C<__END__>. This is standard Perl behavior.
 
 =back
 
 =head1 IMPLEMENTATION
 
-A zip archive of module files are stored in the C<__DATA__> section.
-A minimal parser for Zip archive format is embedded to the beginning
-of the output script, and it will extract the source codes of all
-modules to an on-memory storage at the start-up.  An import hook
-subroutine is put into Perl's C<@INC> facility to load those modules
-by C<require> or C<use>.
+A ZIP archive containing the module files is stored in the C<__DATA__> section.
+A minimal parser for the ZIP archive format is embedded at the beginning
+of the output script. It extracts the source code of all
+modules into memory at start-up. An import hook
+subroutine is placed in Perl's C<@INC> facility to load these modules
+via C<require> or C<use>.
 
-This enables use of C<__DATA__> sections in each included module.
+This also enables the use of C<__DATA__> sections within each included module.
 
 =head1 DEPENDENCIES
 
-Zipped scripts generated by this command will not depend on any
-external modules, except those included in the Core modules of Perl
+Zipped scripts generated by this command do not depend on any
+external modules, except those included in the core modules of Perl
 distributions as of version 5.24.1.
 
 =head1 COMPARISON
 
-C<PAR> is a "Perl Archive Toolkit" containing a similar tool, "C<pp>"
-- PAR Packager.  It can be used to generate a standalone executable
-from several perl files.  C<PAR> provides much richer functionality
-compared to this tool: embedding binary shared objects, even embedding
-Perl interpreter, etc.  At the same time, the behavior of a
-C<PAR>-generated executable is quite complex: it uses temporary
-directories and file caches, it depends on large number of non-core
-modules, and it loads a lot of additional modules at start-up.  These
-introduce potential security attack risks, especially with scripts
-running with elevated privileges e.g. with C<sudo>.
+C<PAR> is a "Perl Archive Toolkit" containing a similar tool named "C<pp>"
+(PAR Packager). It can be used to generate standalone executables
+from several Perl files. C<PAR> provides much richer functionality
+compared to this tool, such as embedding binary shared objects or even
+a Perl interpreter. However, the behavior of a
+C<PAR>-generated executable is complex: it uses temporary
+directories and file caches, depends on a large number of non-core
+modules, and loads many additional modules at start-up. This
+introduces potential security risks, especially for scripts
+running with elevated privileges (e.g., via C<sudo>).
 
-The pros and cons of C<zipperlapp> is the opposite: it can not
-generate interpreter-embedded executables, it does not support shared
-objects, and it does not support automatic searches of dependenty
-libraries.  But, it runs quite simply and efficiently: it depends on
-only the minimum numbers of core modules (even with I<no> external
-binary libraries when option C<-C0> or C<-T> is used), and it uses no
-temporary files and directories at all (on-memory store is used
-instead).  It is very beneficial for small, trusted scripts which
-value transparency and simplicity.
+The pros and cons of C<zipperlapp> are the opposite: it cannot
+generate interpreter-embedded executables, does not support shared
+objects, and does not support automatic dependency resolution.
+However, it operates simply and efficiently: it depends only on a minimum
+number of core modules (and I<no> external binary libraries when using C<-C0> or C<-T>),
+and uses no temporary files or directories (everything is handled in memory).
+This makes it highly beneficial for small, trusted scripts where transparency and simplicity are valued.
 
 =head1 REFERENCES
 
@@ -508,7 +503,7 @@ L<Python's "zipapp" implementation|https://docs.python.org/en/3/library/zipapp.h
 
 =head1 AUTHOR/COPYRIGHT
 
-Copyright 2019-2025 Yutaka OIWA <yutaka@oiwa.jp>.
+Copyright 2019-2026 Yutaka OIWA <yutaka@oiwa.jp>.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -522,13 +517,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 As a special exception to the Apache License, outputs of this
-software, which contain a code snippet copied from this software, may
-be used and distributed under terms of your choice, so long as the
-sole purpose of these works is not redistributing the code snippet,
-this software, or modified works of those.  The "AS-IS BASIS" clause
+software, which contain code snippets copied from this software, may
+be used and distributed under terms of your choice, as long as the
+sole purpose of these works is not to redistribute the code snippets,
+this software, or modified works thereof. The "AS-IS BASIS" clause
 above still applies in these cases.
 
 (In short, you can freely use this software to package YOUR software
-and the Apache License will not apply for YOURS.)
+and the Apache License will not apply to YOURS.)
 
 =cut
